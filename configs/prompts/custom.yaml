@@ -1,0 +1,18 @@
+# Custom Prompts Template
+# Copy this file and edit to add your own brand/topic queries
+#
+# Format:
+# your_category:
+#   - "Query that users might ask"
+#   - "Another query"
+
+# Example:
+# my_brand_queries:
+#   - "What are the best products from [YourBrand]?"
+#   - "Compare [YourBrand] to competitors"
+
+# Add your custom queries below:
+
+your_category:
+  - "Add your first query here"
+  - "Add more queries as needed"

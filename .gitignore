@@ -1,0 +1,37 @@
+# Local environment files
+.env
+.env.local
+*.log
+*.pyc
+__pycache__/
+.pytest_cache/
+.htmlcov/
+
+# Node modules (if frontend is separate)
+node_modules/
+.next/
+out/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.bak
+
+# Testing results
+.results/
+pytest_cache/
+.coverage
+htmlcov/
+
+# Config dumps
+dump.json
+*.txt
+README.md
+
+# Generated data
+results.csv
+*.csv
+*.json

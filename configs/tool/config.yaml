@@ -1,0 +1,67 @@
+# Tool Configuration
+# Configure HOW the tool runs
+# 
+# These settings control the mechanics of running queries and storing results.
+# Users shouldn't need to change these unless tuning performance.
+
+# Model Configuration
+# Define which LLMs to query. Each enabled model runs all prompts independently.
+models:
+  # Primary LLM for generating responses
+  - provider: "ollama"
+    model: "nemotron-3-nano:4b"
+    endpoint: "http://localhost:11434"
+    enabled: true
+    temperature: 0.7
+  
+  # Add additional models to compare results across LLMs
+  - provider: "ollama"
+    model: "qwen3.5:122b"
+    endpoint: "http://localhost:11434"
+    enabled: false
+    temperature: 0.7
+
+# Tracking Parameters
+tracking:
+  # Queries per prompt (affects statistical significance)
+  # Higher = more reliable data but takes longer
+  #   10 queries  → ~±30% confidence interval
+  #   30 queries  → ~±17% confidence interval
+  #   100 queries → ~±10% confidence interval
+  queries_per_prompt: 10
+  
+  # Retry settings for failed queries
+  max_retries: 3
+  
+  # Data retention
+  max_history_days: 90
+
+# Mention Detection Settings
+detection:
+  # Method: "keyword" | "llm" | "both"
+  method: "both"
+  
+  # LLM-based detection config (used when method is "llm" or "both")
+  llm:
+    model: "nemotron-3-nano:4b"
+    temperature: 0.1
+
+# Output Configuration
+output:
+  database_path: "data/tracks.db"
+  export_formats: ["csv", "json"]
+  logs_dir: "logs"
+
+# Database Settings
+database:
+  # Auto-cleanup threshold
+  cleanup_threshold_days: 90
+
+# Default prompts (user can override in users/prompts.yaml)
+prompts:
+  brand_mentions:
+    - "What are the best athletic footwear brands for running in 2026?"
+    - "Compare Nike vs Adidas for basketball shoes"
+  
+  topic_authority:
+    - "What is the future of sustainable athletic footwear?"

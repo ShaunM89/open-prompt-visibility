@@ -1,0 +1,28 @@
+# User Configuration: Brands
+# Configure WHAT to track
+#
+# Edit this file to add/modify brands and competitors you want to monitor.
+# Each brand has keywords to detect mentions.
+
+brands:
+  - name: "Nike"
+    keywords:
+      - "Nike"
+      - "NIKE"
+      - "Just Do It"
+      - "Swoosh"
+      - "Air Max"
+      - "Jordan"
+      - "Dunk"
+      - "Revolution"
+    competitors:
+      - name: "Adidas"
+        keywords: ["Adidas", "ADI", "Impossible is Nothing"]
+      - name: "Reebok"
+        keywords: ["Reebok"]
+      - name: "New Balance"
+        keywords: ["New Balance", "NB"]
+      - name: "Under Armour"
+        keywords: ["Under Armour", "UA"]
+      - name: "Puma"
+        keywords: ["Puma"]

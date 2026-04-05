@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prompt-visibility-tracker"
+version = "0.1.0"
+description = "Track brand mentions in AI-generated responses across multiple LLMs"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    {name = "Shaun", email = "shaun@example.com"}
+]
+license = {text = "MIT"}
+keywords = [
+    "llm",
+    "ai-visibility",
+    "brand-tracking",
+    "prompt-engineering",
+    "answer-engine-optimization"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+    "requests>=2.31.0",
+    "rich>=13.0.0",
+    "rich-click>=1.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+]
+dashboard = [
+    "streamlit>=1.28.0",
+    "pandas>=2.1.0",
+    "plotly>=5.17.0",
+]
+
+[project.scripts]
+pvt = "main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpaths = ["src"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

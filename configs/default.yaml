@@ -1,0 +1,5 @@
+# Default configuration
+# Merges tool settings with user defaults
+
+tool: tool/config.yaml
+users: users

@@ -1,0 +1,15 @@
+click>=8.1.0
+pyyaml>=6.0
+requests>=2.31.0
+rich>=13.0.0
+rich-click>=1.6.0
+
+# Development
+pytest>=7.4.0
+pytest-cov>=4.1.0
+ruff>=0.1.0
+
+# Dashboard (optional)
+streamlit>=1.28.0
+pandas>=2.1.0
+plotly>=5.17.0

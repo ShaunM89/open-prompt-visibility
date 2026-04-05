@@ -1,0 +1,26 @@
+# User Configuration: Prompts
+# Configure what queries to run
+#
+# These are the user queries you ask the LLM. Track which brands
+# get mentioned in response to these queries.
+#
+# Create categories for different types of queries.
+
+brand_mentions:
+  # General brand comparison queries
+  - "What are the best athletic footwear brands for running in 2026?"
+  - "Compare Nike vs Adidas for basketball shoes"
+  - "Name the top 5 athletic apparel companies in 2024"
+  - "Which brand has better running shoes, Nike or Adidas?"
+  
+  # Industry topic queries
+  - "Which sportswear brands offer the best sustainability initiatives?"
+  - "What footwear brands are best for marathon training?"
+  - "Best athletic wear for gym workouts"
+  - "Top sportswear brands 2026"
+
+topic_authority:
+  # Future/innovation questions
+  - "What is the future of sustainable athletic footwear?"
+  - "How has athletic wear technology changed since 2020?"
+  - "Which athletic brand has the most influential athlete endorsements?"

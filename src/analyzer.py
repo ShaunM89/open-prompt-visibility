@@ -1,0 +1,883 @@
+"""Mention detection and analytics engine."""
+
+import json
+import math
+import re
+from collections import defaultdict
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from .models import OllamaAdapter
+from .storage import TrackDatabase
+
+
+class MentionDetector:
+    """Hybrid mention detection (keyword + LLM confirmation)."""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.brands = self._load_brands(config.get("brands", []))
+        self.detection_method = config.get("tracking", {}).get("detection_method", "both")
+
+        # Initialize LLM detector if needed
+        if self.detection_method in ("llm", "both"):
+            llm_config = config.get("tracking", {}).get("llm_detection", {})
+            if llm_config.get("model") == "ollama":
+                self.llm_adapter = OllamaAdapter(
+                    model=llm_config.get("model", "qwen2.5:7b"), temperature=0.1
+                )
+            else:
+                self.llm_adapter = None
+        else:
+            self.llm_adapter = None
+
+    def _load_brands(self, brands_config: List[dict]) -> Dict[str, dict]:
+        """Load brands and their keywords from config."""
+        brands = {}
+        for brand in brands_config:
+            brand_name = brand["name"]
+            brands[brand_name] = {
+                "keywords": brand.get("keywords", []),
+                "competitors": brand.get("competitors", []),
+            }
+
+        # Also add competitors as standalone brands
+        for brand in brands_config:
+            for competitor in brand.get("competitors", []):
+                comp_name = competitor["name"]
+                if comp_name not in brands:
+                    brands[comp_name] = {
+                        "keywords": competitor.get("keywords", [comp_name]),
+                        "competitors": [],
+                    }
+
+        return brands
+
+    def detect(self, response_text: str) -> Dict[str, int]:
+        """Detect brand mentions in response text."""
+        if self.detection_method == "keyword":
+            return self._keyword_detect(response_text)
+        elif self.detection_method == "llm":
+            return self._llm_detect(response_text)
+        else:  # 'both' - keyword first, LLM confirmation
+            keyword_mentions = self._keyword_detect(response_text)
+            if keyword_mentions:
+                return self._llm_confirm(response_text, keyword_mentions)
+            return keyword_mentions
+
+    def _keyword_detect(self, response_text: str) -> Dict[str, int]:
+        """Simple keyword-based mention detection."""
+        mentions: Dict[str, int] = defaultdict(int)
+        text_upper = response_text.upper()
+
+        for brand_name, brand_config in self.brands.items():
+            for keyword in brand_config["keywords"]:
+                # Case-insensitive matching
+                count = len(re.findall(re.escape(keyword.upper()), text_upper))
+                if count > 0:
+                    mentions[brand_name] += count
+
+        return dict(mentions) if mentions else {}
+
+    def _llm_detect(self, response_text: str) -> Dict[str, int]:
+        """LLM-based mention detection."""
+        if not self.llm_adapter:
+            return {}
+
+        prompt = f"""
+You are analyzing text for brand mentions. Extract ALL brand mentions from the following response.
+
+Known brands: {list(self.brands.keys())}
+
+Response text:
+{response_text}
+
+Return ONLY a JSON object with brand names as keys and mention counts as values.
+Example: {{"Nike": 2, "Adidas": 1}}
+If no brands are mentioned, return {{}}.
+"""
+
+        try:
+            result = self.llm_adapter.query(prompt)
+            # Clean up the response
+            result = result.strip()
+            if result.startswith("```json"):
+                result = result[7:]
+            if result.endswith("```"):
+                result = result[:-3]
+            result = result.strip()
+
+            return json.loads(result)
+        except Exception:
+            # Fall back to keyword detection on failure
+            return self._keyword_detect(response_text)
+
+    def _llm_confirm(self, response_text: str, keyword_mentions: Dict[str, int]) -> Dict[str, int]:
+        """Use LLM to confirm keyword-drafted mentions."""
+        if not self.llm_adapter:
+            return keyword_mentions
+
+        mentioned_brands = ", ".join(keyword_mentions.keys())
+        prompt = f"""
+Confirm these brand mentions in the response. Return 1 if the brand is mentioned, 0 if not.
+
+Brands to check: {mentioned_brands}
+
+Response text:
+{response_text}
+
+Return ONLY valid JSON:
+{{"brand1": 1, "brand2": 0}}
+"""
+
+        try:
+            result = self.llm_adapter.query(prompt)
+            result = result.strip()
+            if result.startswith("```json"):
+                result = result[7:]
+            if result.endswith("```"):
+                result = result[:-3]
+            result = result.strip()
+
+            confirmed = json.loads(result)
+
+            # Only keep mentions that LLM confirmed (value = 1)
+            return {
+                brand: count
+                for brand, count in keyword_mentions.items()
+                if confirmed.get(brand) == 1
+            }
+        except Exception:
+            # LLM failed, return keyword results
+            return keyword_mentions
+
+
+class AnalyticsEngine:
+    """Analytics and reporting engine with statistical analysis."""
+
+    Z_SCORES = {90: 1.645, 95: 1.96, 99: 2.576}  # Common confidence levels
+
+    def __init__(self, db: TrackDatabase):
+        self.db = db
+
+    def _calculate_confidence_interval(
+        self, proportion: float, sample_size: int, confidence_level: float = 95.0
+    ) -> Optional[tuple]:
+        """Calculate Wilson score confidence interval for proportions.
+
+        Args:
+            proportion: Observed proportion (mentions/total)
+            sample_size: Number of trials
+            confidence_level: 90, 95, or 99
+
+        Returns:
+            (lower_bound, upper_bound) as percentages, or None if no data
+        """
+        if sample_size == 0 or proportion == 0:
+            return None
+
+        z = self.Z_SCORES.get(int(confidence_level), 1.96)
+        n = sample_size
+        p = proportion / 100.0  # Convert to 0-1 scale
+
+        # Wilson score interval
+        denominator = 1 + z**2 / n
+        centre_adjusted_probability = (p + z**2 / (2 * n)) / denominator
+        adjusted_standard_deviation = (
+            z * math.sqrt((p * (1 - p) + z**2 / (4 * n)) / n)
+        ) / denominator
+
+        lower = (centre_adjusted_probability - adjusted_standard_deviation) * 100
+        upper = (centre_adjusted_probability + adjusted_standard_deviation) * 100
+
+        return (max(0, lower), min(100, upper))
+
+    def calculate_variance(
+        self, brand_keyword: str, days: int = 30, confidence_level: float = 95
+    ) -> Dict[str, Dict[str, Any]]:
+        """Calculate mention rate with confidence intervals per model."""
+        stats = self.db.get_model_statistics(brand_keyword, days)
+
+        if not stats:
+            return {}
+
+        variance_data = {}
+        for model_stat in stats:
+            mention_rate = model_stat["mention_rate_pct"]
+            total_runs = model_stat["total_runs"]
+
+            ci = self._calculate_confidence_interval(mention_rate, total_runs, confidence_level)
+
+            variance_data[model_stat["model_name"]] = {
+                "mention_rate": mention_rate,
+                "total_runs": total_runs,
+                "total_mentions": model_stat["total_mentions"],
+                "confidence_interval_95": ci,
+                "standard_error": (
+                    math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs) * 100
+                    if total_runs > 0
+                    else 0
+                ),
+            }
+
+        return variance_data
+
+    def get_trends(self, brand_keyword: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Get trend data for a brand."""
+        return self.db.get_trends(brand_keyword, days)
+
+    def compare_models(self, brand_keyword: str, days: int = 30) -> List[Dict[str, Any]]:
+        """Compare models for a brand."""
+        return self.db.get_model_statistics(brand_keyword, days)
+
+    def get_all_mentions(self, days: int = 90) -> List[Dict[str, Any]]:
+        """Get all mentions across all brands."""
+        return self.db.get_all_mentions(days)
+
+    def get_summary(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+        """Get summary statistics for a brand."""
+        stats = self.db.get_model_statistics(brand_keyword, days)
+
+        if not stats:
+            return {
+                "brand": brand_keyword,
+                "period_days": days,
+                "total_mentions": 0,
+                "total_queries": 0,
+                "overall_mention_rate": 0.0,
+                "variance_by_model": {},
+            }
+
+        total_mentions = sum(s["total_mentions"] for s in stats)
+        total_queries = sum(s["total_runs"] for s in stats)
+        overall_rate = (total_mentions / total_queries * 100) if total_queries > 0 else 0
+
+        variance_data = {}
+        for model_stat in stats:
+            variance_data[model_stat["model_name"]] = {
+                "mention_rate": model_stat["mention_rate_pct"],
+                "total_runs": model_stat["total_runs"],
+                "total_mentions": model_stat["total_mentions"],
+            }
+
+        return {
+            "brand": brand_keyword,
+            "period_days": days,
+            "total_mentions": total_mentions,
+            "total_queries": total_queries,
+            "overall_mention_rate": round(overall_rate, 2),
+            "variance_by_model": variance_data,
+        }
+
+    def get_visibility_score(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+        """Calculate overall visibility score for a brand.
+
+        Returns:
+            Dictionary with score, total prompts, successful prompts, and per-model breakdown.
+        """
+        trends = self.db.get_trends(brand_keyword, days, group_by_day=False)
+
+        if not trends:
+            return {
+                "brand": brand_keyword,
+                "score": 0.0,
+                "total_prompts": 0,
+                "successful_prompts": 0,
+                "by_model": [],
+                "confidence_interval": None,
+            }
+
+        total_prompts = sum(t["total_queries"] for t in trends)
+        successful_prompts = sum(t["mention_count"] for t in trends)
+
+        score = (successful_prompts / total_prompts * 100) if total_prompts > 0 else 0.0
+
+        # Calculate confidence interval
+        ci = self._calculate_confidence_interval(score, total_prompts)
+
+        # Per-model breakdown
+        by_model = []
+        for model_stat in self.db.get_model_statistics(brand_keyword, days):
+            model_total = model_stat["total_runs"]
+            model_mentions = model_stat["total_mentions"]
+            model_score = (model_mentions / model_total * 100) if model_total > 0 else 0.0
+            model_ci = self._calculate_confidence_interval(model_score, model_total)
+
+            by_model.append(
+                {
+                    "model_name": model_stat["model_name"],
+                    "model_provider": model_stat["model_provider"],
+                    "score": round(model_score, 2),
+                    "total_prompts": model_total,
+                    "successful_prompts": model_mentions,
+                    "confidence_interval": model_ci,
+                }
+            )
+
+        return {
+            "brand": brand_keyword,
+            "score": round(score, 2),
+            "total_prompts": total_prompts,
+            "successful_prompts": successful_prompts,
+            "by_model": by_model,
+            "confidence_interval": ci,
+        }
+
+    def get_competitor_comparison(self, target_brand: str, days: int = 30) -> Dict[str, Any]:
+        """Compare target brand mention rates against competitors.
+
+        Args:
+            target_brand: The target brand to compare
+            days: Lookback period in days
+
+        Returns:
+            Dictionary with comparison data including all brands and their mention rates.
+        """
+        # Load brands config to get competitor list
+        import yaml
+        from pathlib import Path
+
+        config_file = Path("configs/default.yaml")
+        if config_file.exists():
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+
+            # Merge brand configs
+            if "tool" in config and "users" in config:
+                users_path = config_file.parent / config["users"].lstrip("/")
+                brands_file = users_path / "brands.yaml"
+                if brands_file.exists():
+                    with open(brands_file, "r") as bf:
+                        user_config = yaml.safe_load(bf)
+                        brands_config = user_config.get("brands", [])
+                else:
+                    brands_config = config.get("brands", [])
+            else:
+                brands_config = config.get("brands", [])
+        else:
+            brands_config = []
+
+        # Find target brand and its competitors
+        target_data = None
+        competitors_data = []
+
+        for brand in brands_config:
+            if brand["name"] == target_brand:
+                target_data = brand
+                # Get competitors from target brand
+                for competitor in brand.get("competitors", []):
+                    competitors_data.append(
+                        {
+                            "name": competitor["name"],
+                            "keywords": competitor.get("keywords", [competitor["name"]]),
+                        }
+                    )
+                break
+
+        if not target_data:
+            return {
+                "target_brand": target_brand,
+                "target_score": 0.0,
+                "competitors": [],
+                "period_days": days,
+            }
+
+        # Get mention rates for target brand
+        target_stats = self.db.get_model_statistics(target_brand, days)
+        total_target = sum(s["total_runs"] for s in target_stats)
+        total_target_mentions = sum(s["total_mentions"] for s in target_stats)
+        target_score = (total_target_mentions / total_target * 100) if total_target > 0 else 0.0
+
+        # Get mention rates for all competitors
+        competitors_comparison = []
+        all_brands_names = set()
+
+        for comp in competitors_data:
+            comp_name = comp["name"]
+            all_brands_names.add(comp_name)
+
+            comp_stats = self.db.get_model_statistics(comp_name, days)
+            comp_total = sum(s["total_runs"] for s in comp_stats)
+            comp_mentions = sum(s["total_mentions"] for s in comp_stats)
+            comp_score = (comp_mentions / comp_total * 100) if comp_total > 0 else 0.0
+
+            competitors_comparison.append(
+                {
+                    "name": comp_name,
+                    "score": round(comp_score, 2),
+                    "total_prompts": comp_total,
+                    "successful_prompts": comp_mentions,
+                    "mention_count": comp_mentions,
+                }
+            )
+
+        # Also include target brand in the full list
+        all_brands = [
+            {
+                "name": target_brand,
+                "score": round(target_score, 2),
+                "total_prompts": total_target,
+                "successful_prompts": total_target_mentions,
+                "is_target": True,
+            }
+        ]
+        all_brands.extend(competitors_comparison)
+
+        # Sort by score descending
+        all_brands.sort(key=lambda x: x["score"], reverse=True)
+
+        return {
+            "target_brand": target_brand,
+            "target_score": round(target_score, 2),
+            "competitors": competitors_comparison,
+            "all_brands": all_brands,
+            "period_days": days,
+        }
+
+    def get_prompt_list(
+        self,
+        brand_keyword: str,
+        model_name: Optional[str] = None,
+        days: int = 30,
+        success_filter: Optional[bool] = None,
+        page: int = 1,
+        limit: int = 25,
+    ) -> Dict[str, Any]:
+        """Get detailed list of prompts tested for a brand.
+
+        Args:
+            brand_keyword: Brand to filter by
+            model_name: Optional model filter
+            days: Lookback period
+            success_filter: Filter by success (True) or failure (False), or None for all
+            page: Page number (1-indexed)
+            limit: Items per page
+
+        Returns:
+            Dictionary with prompts list, pagination info, and totals.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=days)
+
+            # Build query
+            query = """
+                SELECT 
+                    id,
+                    run_id,
+                    model_provider,
+                    model_name,
+                    prompt,
+                    response_text,
+                    mentions_json,
+                    detected_at
+                FROM visibility_records
+                WHERE detected_at > ?
+                AND mentions_json LIKE ?
+            """
+            params = [cutoff, f'%"{brand_keyword}%']
+
+            if model_name:
+                query += " AND model_name = ?"
+                params.append(model_name)
+
+            # Success filter: TRUE = has other brands mentioned, FALSE = only target brand or none
+            if success_filter is not None:
+                if success_filter:
+                    # Successful = target brand mentioned AND at least one other brand
+                    query += """
+                        AND (
+                            LENGTH(mentions_json) > 2 
+                            AND mentions_json != ?
+                        )
+                    """
+                    params.append(f'{{"{brand_keyword}": ')
+                else:
+                    # Failed = no mentions or only target brand
+                    query += """
+                        AND (
+                            mentions_json = '{}'
+                            OR mentions_json = ?
+                            OR mentions_json LIKE ?
+                        )
+                    """
+                    params.extend([f'{{"{brand_keyword}": 1}}', f'{{"{brand_keyword}": 1,%'])
+
+            query += " ORDER BY detected_at DESC"
+
+            # Add pagination
+            offset = (page - 1) * limit
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            # Get total count for pagination
+            count_query = """
+                SELECT COUNT(*) FROM visibility_records
+                WHERE detected_at > ?
+                AND mentions_json LIKE ?
+            """
+            count_params = [cutoff, f'%"{brand_keyword}%']
+
+            if model_name:
+                count_query += " AND model_name = ?"
+                count_params.append(model_name)
+
+            cursor.execute(count_query, count_params)
+            total = cursor.fetchone()[0]
+
+            # Format results
+            prompts = []
+            for row in rows:
+                mentions = json.loads(row["mentions_json"] or "{}")
+                is_success = len(mentions) > 1  # Success if more than one brand mentioned
+                prompts.append(
+                    {
+                        "id": row["id"],
+                        "run_id": row["run_id"],
+                        "model_provider": row["model_provider"],
+                        "model_name": row["model_name"],
+                        "prompt": row["prompt"],
+                        "response_text": row["response_text"],
+                        "mentions": mentions,
+                        "detected_at": row["detected_at"],
+                        "is_success": is_success,
+                    }
+                )
+
+            return {
+                "prompts": prompts,
+                "pagination": {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "total_pages": (total + limit - 1) // limit,
+                },
+                "filters": {
+                    "brand": brand_keyword,
+                    "model": model_name,
+                    "days": days,
+                    "success_filter": success_filter,
+                },
+            }
+        finally:
+            conn.close()
+
+    def get_prompt_detail(self, record_id: int) -> Optional[Dict[str, Any]]:
+        """Get detailed information for a single prompt result.
+
+        Args:
+            record_id: The visibility_records ID
+
+        Returns:
+            Dictionary with full prompt details and highlighted mentions, or None.
+        """
+        conn = self.db._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                """
+                SELECT 
+                    id,
+                    run_id,
+                    model_provider,
+                    model_name,
+                    prompt,
+                    response_text,
+                    mentions_json,
+                    detected_at
+                FROM visibility_records
+                WHERE id = ?
+            """,
+                (record_id,),
+            )
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            mentions = json.loads(row["mentions_json"] or "{}")
+
+            # Load brands config for highlighting
+            import yaml
+            from pathlib import Path
+
+            config_file = Path("configs/default.yaml")
+            brands = {}
+
+            if config_file.exists():
+                with open(config_file, "r") as f:
+                    config = yaml.safe_load(f)
+
+                if "tool" in config and "users" in config:
+                    users_path = config_file.parent / config["users"].lstrip("/")
+                    brands_file = users_path / "brands.yaml"
+                    if brands_file.exists():
+                        with open(brands_file, "r") as bf:
+                            user_config = yaml.safe_load(bf)
+                            for brand in user_config.get("brands", []):
+                                brands[brand["name"]] = {
+                                    "keywords": brand.get("keywords", []),
+                                    "is_target": False,
+                                }
+                                # Add competitors
+                                for comp in brand.get("competitors", []):
+                                    brands[comp["name"]] = {
+                                        "keywords": comp.get("keywords", [comp["name"]]),
+                                        "is_target": False,
+                                    }
+
+            # Determine target brand from mentions or context
+            target_brand = None
+            # For now, assume first mentioned brand is the "success" target
+            if mentions:
+                target_brand = list(mentions.keys())[0]
+
+            # Create highlighted response text
+            highlighted_text = self._highlight_mentions(
+                row["response_text"] or "", mentions, target_brand, brands
+            )
+
+            return {
+                "id": row["id"],
+                "run_id": row["run_id"],
+                "model_provider": row["model_provider"],
+                "model_name": row["model_name"],
+                "prompt": row["prompt"],
+                "response_text": row["response_text"],
+                "highlighted_response": highlighted_text,
+                "mentions": mentions,
+                "detected_at": row["detected_at"],
+                "target_brand": target_brand,
+            }
+        finally:
+            conn.close()
+
+    def _highlight_mentions(
+        self,
+        text: str,
+        mentions: Dict[str, int],
+        target_brand: Optional[str],
+        brands: Dict[str, dict],
+    ) -> str:
+        """Create HTML with highlighted brand mentions.
+
+        Args:
+            text: Response text to highlight
+            mentions: Dictionary of brand mentions
+            target_brand: The primary brand (target)
+            brands: All brands config
+
+        Returns:
+            HTML string with highlighted mentions.
+        """
+        result = text
+
+        # Sort by keyword length (longest first) to avoid partial replacements
+        all_keywords = []
+        for brand_name, config in brands.items():
+            is_target = brand_name == target_brand
+            for keyword in config.get("keywords", []):
+                all_keywords.append(
+                    {"keyword": keyword, "brand": brand_name, "is_target": is_target}
+                )
+
+        all_keywords.sort(key=lambda x: len(x["keyword"]), reverse=True)
+
+        # Replace each keyword with highlighted version
+        for kw_info in all_keywords:
+            keyword = kw_info["keyword"]
+            brand = kw_info["brand"]
+            is_target = kw_info["is_target"]
+            is_mentioned = brand in mentions
+
+            # Escape HTML in keyword
+            escaped_keyword = re.escape(keyword)
+
+            if is_mentioned:
+                # Highlighted color: green for target, orange for competitors
+                color = "green" if is_target else "#f59e0b"
+                replacement = f'<mark style="background-color: {color}33; color: {color}; font-weight: bold;">{keyword}</mark>'
+            else:
+                replacement = keyword
+
+            # Case-insensitive replacement
+            result = re.sub(rf"\b{escaped_keyword}\b", replacement, result, flags=re.IGNORECASE)
+
+        return result
+
+    def get_run_history(self, days: int = 30, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get history of tracking runs with summary statistics.
+
+        Args:
+            days: Lookback period
+            limit: Maximum runs to return
+
+        Returns:
+            List of run records with summary stats.
+        """
+        recent_runs = self.db.get_recent_runs(days)
+
+        run_history = []
+        for run in recent_runs[:limit]:
+            # Get records for this run
+            records = self.db.get_by_run(run["id"])
+
+            # Calculate run statistics
+            total_queries = len(records)
+            successful_queries = sum(
+                1 for r in records if r["mentions_json"] and r["mentions_json"] != "{}"
+            )
+
+            # Get models used
+            models_used = list(set(r["model_name"] for r in records))
+
+            # Parse mentions for all brands
+            all_mentions = defaultdict(int)
+            for record in records:
+                mentions = json.loads(record["mentions_json"] or "{}")
+                for brand, count in mentions.items():
+                    all_mentions[brand] += count
+
+            run_history.append(
+                {
+                    "run_id": run["id"],
+                    "started_at": run["started_at"],
+                    "completed_at": run["completed_at"],
+                    "duration": None,
+                    "total_queries": total_queries,
+                    "successful_queries": successful_queries,
+                    "success_rate": (successful_queries / total_queries * 100)
+                    if total_queries > 0
+                    else 0,
+                    "models_used": models_used,
+                    "all_mentions": dict(all_mentions),
+                }
+            )
+
+        # Calculate durations
+        for run in run_history:
+            if run["completed_at"] and run["started_at"]:
+                start = run["started_at"]
+                end = run["completed_at"]
+                if hasattr(start, "strftime"):
+                    run["duration"] = str(end - start)
+
+        return run_history
+
+    def get_statistical_summary(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+        """Calculate comprehensive statistical summary for a brand.
+
+        Includes mean, standard deviation, confidence intervals,
+        and run-to-run variance.
+
+        Args:
+            brand_keyword: Brand to analyze
+            days: Lookback period
+
+        Returns:
+            Dictionary with comprehensive statistical metrics.
+        """
+        # Get all runs in period
+        runs = self.get_run_history(days)
+
+        if not runs:
+            return {
+                "brand": brand_keyword,
+                "period_days": days,
+                "n_runs": 0,
+                "message": "No runs found",
+            }
+
+        # Calculate mention rate per run
+        run_rates = []
+        for run in runs:
+            # Count mentions of this brand in this run
+            brand_mentions = sum(
+                1
+                for r in self.db.get_by_run(run["run_id"])
+                if brand_keyword in (json.loads(r["mentions_json"] or "{}"))
+            )
+            total = run["total_queries"]
+            rate = (brand_mentions / total * 100) if total > 0 else 0
+            run_rates.append(rate)
+
+        if not run_rates:
+            return {
+                "brand": brand_keyword,
+                "period_days": days,
+                "n_runs": len(runs),
+                "message": "No data for brand",
+            }
+
+        # Calculate statistics
+        n = len(run_rates)
+        mean_rate = sum(run_rates) / n
+        variance = sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
+        std_dev = math.sqrt(variance)
+        std_error = std_dev / math.sqrt(n) if n > 0 else 0
+
+        # 95% confidence interval
+        ci = self._calculate_confidence_interval(mean_rate, n)
+
+        # Coefficient of variation (measures stability)
+        cv = (std_dev / mean_rate * 100) if mean_rate > 0 else 0
+
+        # Identify significant changes (>2 std from mean)
+        anomalies = []
+        for i, rate in enumerate(run_rates):
+            if abs(rate - mean_rate) > 2 * std_dev:
+                anomalies.append(
+                    {
+                        "run_index": i,
+                        "run_id": runs[i]["run_id"],
+                        "rate": rate,
+                        "deviation": (rate - mean_rate) / std_dev if std_dev > 0 else 0,
+                    }
+                )
+
+        return {
+            "brand": brand_keyword,
+            "period_days": days,
+            "n_runs": n,
+            "mean_mention_rate": round(mean_rate, 2),
+            "std_deviation": round(std_dev, 2),
+            "std_error": round(std_error, 2),
+            "confidence_interval_95": ci,
+            "coefficient_of_variation": round(cv, 2),
+            "min_rate": min(run_rates),
+            "max_rate": max(run_rates),
+            "rate_range": max(run_rates) - min(run_rates),
+            "anomalies": anomalies,
+            "interpretation": self._interpret_statistics(cv, n, std_dev),
+        }
+
+    def _interpret_statistics(self, cv: float, n: int, std_dev: float) -> str:
+        """Interpret statistical metrics for user-friendly display."""
+        interpretations = []
+
+        # Stability assessment
+        if cv < 10:
+            interpretations.append("Very stable performance")
+        elif cv < 20:
+            interpretations.append("Stable performance with minor variation")
+        elif cv < 30:
+            interpretations.append("Moderate variation detected")
+        else:
+            interpretations.append("High variation - investigate causes")
+
+        # Sample size assessment
+        if n < 5:
+            interpretations.append("Limited data points - confidence will be lower")
+        elif n < 10:
+            interpretations.append("Adequate sample size for preliminary insights")
+        else:
+            interpretations.append("Strong sample size for reliable conclusions")
+
+        return "; ".join(interpretations)

@@ -1,0 +1,20 @@
+# Nike-related test queries for brand mention detection
+# These are queries that users might ask AI assistants
+
+brand_mentions:
+  - "What are the best athletic footwear brands for running in 2024?"
+  - "Compare Nike vs Adidas for basketball shoes"
+  - "Which sportswear brands offer the best sustainability initiatives?"
+  - "Name the top 5 athletic apparel companies in 2024"
+  - "What footwear brands are best for marathon training?"
+  - "I'm looking for shoes with the swoosh logo, what should I buy?"
+  - "Which brand's Just Do It slogan is most recognizable?"
+  - "Best shoes from the company founded by Phil Knight"
+  - "What brand made the Air Jordan line?"
+  - "Which athletic brand has the best air cushioning technology?"
+  - "Compare Nike React foam to Adidas Boost foam"
+  - "What brand's Flyknit technology is most popular?"
+  - "Nike or Adidas: which has better running shoes?"
+  - "Is Nike or Under Armour better for training?"
+  - "Compare Reebok and Nike for gym workouts"
+  - "Nike vs New Balance: which has better width options?"
