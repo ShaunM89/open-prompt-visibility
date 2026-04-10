@@ -189,6 +189,13 @@ export async function fetchVisibilityScore(brand: string, days: number): Promise
 export async function fetchCompetitorComparison(targetBrand: string, days: number): Promise<CompetitorComparison> {
   try {
     const data = await fetchApi('data', { brand: targetBrand, days, endpoint: 'competitors' });
+    // Ensure all_brands is always present
+    if (!data.all_brands) {
+      data.all_brands = [
+        { name: targetBrand, score: data.target_score || 0, total_prompts: 0, successful_prompts: 0, is_target: true },
+        ...(data.competitors || []).map((c: any) => ({ ...c, is_target: false }))
+      ].sort((a: any, b: any) => b.score - a.score);
+    }
     return data;
   } catch (err) {
     return {

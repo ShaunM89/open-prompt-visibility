@@ -98,11 +98,11 @@ export default function Home() {
       <div className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
         {/* Controls */}
         <div className="mb-6 flex gap-4 flex-wrap items-center">
-          <select 
-            value={brand} 
-            onChange={(e) => setBrand(e.target.value)}
-            className="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border"
-          >
+            <select
+              value={brand}
+              onChange={(e) => setBrand(e.target.value)}
+              className="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border text-gray-900"
+            >
             <option>Nike</option>
             <option>Adidas</option>
             <option>Reebok</option>
@@ -111,11 +111,11 @@ export default function Home() {
             <option>Puma</option>
           </select>
           
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border"
-          >
+            <select
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              className="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border text-gray-900"
+            >
             <option value={7}>Last 7 days</option>
             <option value={30}>Last 30 days</option>
             <option value={90}>Last 90 days</option>
@@ -127,7 +127,7 @@ export default function Home() {
               className={`px-3 py-1 rounded text-sm ${
                 successFilter === null 
                   ? 'bg-indigo-600 text-white' 
-                  : 'bg-gray-200 text-gray-700'
+                  : 'bg-gray-200 text-gray-900'
               }`}
             >
               All
@@ -137,7 +137,7 @@ export default function Home() {
               className={`px-3 py-1 rounded text-sm ${
                 successFilter === true 
                   ? 'bg-green-600 text-white' 
-                  : 'bg-gray-200 text-gray-700'
+                  : 'bg-gray-200 text-gray-900'
               }`}
             >
               Success only
@@ -147,7 +147,7 @@ export default function Home() {
               className={`px-3 py-1 rounded text-sm ${
                 successFilter === false 
                   ? 'bg-red-600 text-white' 
-                  : 'bg-gray-200 text-gray-700'
+                  : 'bg-gray-200 text-gray-900'
               }`}
             >
               No mentions
@@ -171,7 +171,7 @@ export default function Home() {
                 className={`py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === tab.id
                     ? 'border-indigo-500 text-indigo-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    : 'border-transparent text-gray-900 hover:text-gray-900 hover:border-gray-300'
                 }`}
               >
                 {tab.label}
@@ -188,7 +188,7 @@ export default function Home() {
             {visibilityScore && (
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-4 mb-8">
                 <div className="bg-white overflow-hidden shadow rounded-lg p-5">
-                  <dt className="text-sm font-medium text-gray-500 truncate">Visibility Score</dt>
+                  <dt className="text-sm font-medium text-gray-900 truncate">Visibility Score</dt>
                   <dd className={`mt-2 text-4xl font-bold ${
                     visibilityScore.score >= 70 ? 'text-green-600' : 
                     visibilityScore.score >= 40 ? 'text-yellow-600' : 'text-red-600'
@@ -196,29 +196,29 @@ export default function Home() {
                     {visibilityScore.score}%
                   </dd>
                   {visibilityScore.confidence_interval && (
-                    <dd className="mt-1 text-xs text-gray-500">
+                    <dd className="mt-1 text-xs text-gray-900">
                       95% CI: [{visibilityScore.confidence_interval[0].toFixed(1)} - {visibilityScore.confidence_interval[1].toFixed(1)}]%
                     </dd>
                   )}
                 </div>
                 
                 <div className="bg-white overflow-hidden shadow rounded-lg p-5">
-                  <dt className="text-sm font-medium text-gray-500 truncate">Successful Prompts</dt>
+                  <dt className="text-sm font-medium text-gray-900 truncate">Successful Prompts</dt>
                   <dd className="mt-2 text-3xl font-semibold text-gray-900">
                     {visibilityScore.successful_prompts}
                   </dd>
-                  <dd className="mt-1 text-xs text-gray-500">
+                  <dd className="mt-1 text-xs text-gray-900">
                     of {visibilityScore.total_prompts} total
                   </dd>
                 </div>
 
                 <div className="bg-white overflow-hidden shadow rounded-lg p-5">
-                  <dt className="text-sm font-medium text-gray-500 truncate">Total Runs</dt>
+                  <dt className="text-sm font-medium text-gray-900 truncate">Total Runs</dt>
                   <dd className="mt-1 text-3xl font-semibold text-gray-900">{overview.stats?.total_runs}</dd>
                 </div>
                 
                 <div className="bg-white overflow-hidden shadow rounded-lg p-5">
-                  <dt className="text-sm font-medium text-gray-500 truncate">Total Queries</dt>
+                  <dt className="text-sm font-medium text-gray-900 truncate">Total Queries</dt>
                   <dd className="mt-1 text-3xl font-semibold text-gray-900">{overview.stats?.total_records}</dd>
                 </div>
               </div>
@@ -242,7 +242,7 @@ export default function Home() {
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-gray-500 text-center py-8">No trend data available</p>
+                  <p className="text-gray-900 text-center py-8">No trend data available</p>
                 )}
               </div>
 
@@ -259,7 +259,7 @@ export default function Home() {
                     </RadarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-gray-500 text-center py-8">No model data available</p>
+                  <p className="text-gray-900 text-center py-8">No model data available</p>
                 )}
               </div>
             </div>
@@ -271,10 +271,10 @@ export default function Home() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Query Count</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mention Rate</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">95% CI</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Model</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Query Count</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mention Rate</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">95% CI</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
@@ -283,13 +283,13 @@ export default function Home() {
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                           {row.model_name}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {row.total_runs}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {row.mention_rate_pct}%
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           {visibilityScore?.by_model.find(m => m.model_name === row.model_name)?.confidence_interval 
                             ? `[${visibilityScore.by_model.find(m => m.model_name === row.model_name)!.confidence_interval![0].toFixed(1)} - ${visibilityScore.by_model.find(m => m.model_name === row.model_name)!.confidence_interval![1].toFixed(1)}]%`
                             : 'N/A'
@@ -300,7 +300,7 @@ export default function Home() {
                   </tbody>
                 </table>
               ) : (
-                <p className="text-gray-500 text-center py-8">No model comparison data available</p>
+                <p className="text-gray-900 text-center py-8">No model comparison data available</p>
               )}
             </div>
           </>
@@ -313,11 +313,11 @@ export default function Home() {
             </h2>
             
             <div className="mb-6">
-              <p className="text-sm text-gray-600 mb-2">
+              <p className="text-sm text-gray-900 mb-2">
                 All brands sorted by mention rate ({days} days)
               </p>
               <div className="space-y-3">
-                {competitorData.all_brands.map((br, idx) => (
+                {(competitorData.all_brands || []).map((br, idx) => (
                   <div key={br.name} className="flex items-center">
                     <div className="w-48 text-sm font-medium text-gray-900 truncate">
                       {br.name}
@@ -332,7 +332,7 @@ export default function Home() {
                     <div className="w-24 text-sm font-medium text-gray-900 text-right">
                       {br.score}%
                     </div>
-                    <div className="w-48 text-xs text-gray-500 text-right pl-4">
+                    <div className="w-48 text-xs text-gray-900 text-right pl-4">
                       {br.successful_prompts}/{br.total_prompts}
                     </div>
                   </div>
@@ -344,22 +344,22 @@ export default function Home() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Brand</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Query Count</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mention Rate</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Brand</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Type</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Query Count</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mention Rate</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {competitorData.all_brands.map((br) => (
+                {(competitorData.all_brands || []).map((br) => (
                   <tr key={br.name}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {br.name}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {br.is_target ? 'Target' : 'Competitor'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {br.total_prompts}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -384,37 +384,37 @@ export default function Home() {
                   <h3 className="font-medium text-gray-900">Prompt Details</h3>
                   <button
                     onClick={() => setSelectedPrompt(null)}
-                    className="text-gray-500 hover:text-gray-700"
+                    className="text-gray-900 hover:text-gray-900"
                   >
                     ✕
                   </button>
                 </div>
                 
                 <div className="mb-4">
-                  <p className="text-sm text-gray-600 mb-2">Prompt:</p>
-                  <div className="bg-white p-3 rounded border text-sm font-mono">
+                  <p className="text-sm text-gray-900 mb-2">Prompt:</p>
+                  <div className="bg-white p-3 rounded border text-sm font-mono text-gray-900">
                     {selectedPrompt.prompt}
                   </div>
                 </div>
                 
                 {selectedPrompt.highlighted_response ? (
                   <div>
-                    <p className="text-sm text-gray-600 mb-2">Response (highlighted):</p>
-                    <div 
-                      className="bg-white p-3 rounded border text-sm prose max-w-none"
-                      dangerouslySetInnerHTML={{ __html: selectedPrompt.highlighted_response }}
-                    />
+                    <p className="text-sm text-gray-900 mb-2">Response (highlighted):</p>
+                     <div 
+                       className="bg-white p-3 rounded border text-sm prose max-w-none text-gray-900"
+                       dangerouslySetInnerHTML={{ __html: selectedPrompt.highlighted_response }}
+                     />
                   </div>
                 ) : (
                   <div>
-                    <p className="text-sm text-gray-600 mb-2">Response:</p>
-                    <div className="bg-white p-3 rounded border text-sm whitespace-pre-wrap">
+                    <p className="text-sm text-gray-900 mb-2">Response:</p>
+                    <div className="bg-white p-3 rounded border text-sm whitespace-pre-wrap text-gray-900">
                       {selectedPrompt.response_text}
                     </div>
                   </div>
                 )}
                 
-                <div className="mt-3 flex gap-4 text-sm text-gray-600">
+                <div className="mt-3 flex gap-4 text-sm text-gray-900">
                   <div>Model: {selectedPrompt.model_name}</div>
                   <div>Date: {new Date(selectedPrompt.detected_at).toLocaleString()}</div>
                   <div>Mentions: {JSON.stringify(selectedPrompt.mentions)}</div>
@@ -426,11 +426,11 @@ export default function Home() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prompt</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Model</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mentions</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Status</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Prompt</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Model</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mentions</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Date</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -446,13 +446,13 @@ export default function Home() {
                       <td className="px-4 py-3 text-sm text-gray-900 max-w-md truncate">
                         {prompt.prompt}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {prompt.model_name}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {Object.keys(prompt.mentions).join(', ') || 'None'}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {new Date(prompt.detected_at).toLocaleDateString()}
                       </td>
                     </tr>
@@ -467,17 +467,17 @@ export default function Home() {
                 <button
                   onClick={() => setPromptPage(p => Math.max(1, p - 1))}
                   disabled={promptPage === 1}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded disabled:opacity-50"
+                  className="px-4 py-2 bg-gray-200 text-gray-900 rounded disabled:opacity-50"
                 >
                   Previous
                 </button>
-                <span className="text-sm text-gray-600">
+                <span className="text-sm text-gray-900">
                   Page {promptPage} of {promptList.pagination.total_pages}
                 </span>
                 <button
                   onClick={() => setPromptPage(p => Math.min(promptList.pagination.total_pages, p + 1))}
                   disabled={promptPage === promptList.pagination.total_pages}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded disabled:opacity-50"
+                  className="px-4 py-2 bg-gray-200 text-gray-900 rounded disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -494,12 +494,12 @@ export default function Home() {
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Run ID</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Duration</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Queries</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Success Rate</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Models</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Run ID</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Duration</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Queries</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Success Rate</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-900 uppercase">Models</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -508,13 +508,13 @@ export default function Home() {
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
                         #{run.run_id}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {new Date(run.started_at).toLocaleString()}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {run.duration || 'N/A'}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {run.successful_queries}/{run.total_queries}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">
@@ -526,7 +526,7 @@ export default function Home() {
                           {run.success_rate}%
                         </span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                         {run.models_used.join(', ')}
                       </td>
                     </tr>
@@ -536,7 +536,7 @@ export default function Home() {
             </div>
           
             {!runHistory.length && (
-              <p className="text-gray-500 text-center py-8">No runs found in this period</p>
+              <p className="text-gray-900 text-center py-8">No runs found in this period</p>
             )}
           </div>
         )}
@@ -550,23 +550,23 @@ export default function Home() {
                 <h3 className="font-medium text-gray-900 mb-3">Key Metrics</h3>
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Analysis Period:</dt>
+                    <dt className="text-gray-900">Analysis Period:</dt>
                     <dd className="font-medium">{statSummary.period_days} days</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Number of Runs:</dt>
+                    <dt className="text-gray-900">Number of Runs:</dt>
                     <dd className="font-medium">{statSummary.n_runs}</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Mean Mention Rate:</dt>
+                    <dt className="text-gray-900">Mean Mention Rate:</dt>
                     <dd className="font-medium">{statSummary.mean_mention_rate}%</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Std Deviation:</dt>
+                    <dt className="text-gray-900">Std Deviation:</dt>
                     <dd className="font-medium">{statSummary.std_deviation.toFixed(2)}%</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Std Error:</dt>
+                    <dt className="text-gray-900">Std Error:</dt>
                     <dd className="font-medium">{statSummary.std_error.toFixed(2)}%</dd>
                   </div>
                 </dl>
@@ -576,7 +576,7 @@ export default function Home() {
                 <h3 className="font-medium text-gray-900 mb-3">Confidence Analysis</h3>
                 <dl className="space-y-2 text-sm">
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">95% Confidence Interval:</dt>
+                    <dt className="text-gray-900">95% Confidence Interval:</dt>
                     <dd className="font-medium">
                       {statSummary.confidence_interval_95 
                         ? `[${statSummary.confidence_interval_95[0].toFixed(1)} - ${statSummary.confidence_interval_95[1].toFixed(1)}]%`
@@ -585,19 +585,19 @@ export default function Home() {
                     </dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Coefficient of Variation:</dt>
+                    <dt className="text-gray-900">Coefficient of Variation:</dt>
                     <dd className="font-medium">{statSummary.coefficient_of_variation.toFixed(1)}%</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Min Rate:</dt>
+                    <dt className="text-gray-900">Min Rate:</dt>
                     <dd className="font-medium">{statSummary.min_rate}%</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Max Rate:</dt>
+                    <dt className="text-gray-900">Max Rate:</dt>
                     <dd className="font-medium">{statSummary.max_rate}%</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt className="text-gray-500">Range:</dt>
+                    <dt className="text-gray-900">Range:</dt>
                     <dd className="font-medium">{statSummary.rate_range.toFixed(1)}%</dd>
                   </div>
                 </dl>

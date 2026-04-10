@@ -1,128 +1,177 @@
 # AI Visibility Tracker
-A comprehensive dashboard for monitoring LLM brand visibility in responses across multiple models and providers.
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-development-brightgreen)
+Track how often AI chatbots mention your brand. Query multiple LLMs with test prompts, detect brand mentions in responses, and measure your visibility with statistical confidence.
 
-## ✨ Features
+## What It Does
 
-- **Visibility Score**: Calculate how often your target brand is mentioned across diverse prompts
-- **Competitor Analysis**: Compare mention rates vs. competitors (Adidas, Mistral, etc.)
-- **Model Comparison**: Track performance across different LLMs (Nemotron, Qwen, Llama, etc.)
-- **Statistical Analysis**: Confidence intervals, sample adequacy, statistical significance
-- **Prompt Management**: Track prompts used and results in structured database
-- **Auto-Prompt Generation**: Generate relevant prompts from brand domains
-- **Query Fan-Out**: Statistical robustness through multiple attempts
+When someone asks ChatGPT, Claude, or a local model "What are the best running shoes?", does your brand get mentioned? This tool answers that question systematically:
 
-## 🚀 Quick Start
+1. **Sends test prompts** to one or more LLMs (Ollama, OpenAI, Anthropic, HuggingFace)
+2. **Detects brand mentions** using keyword matching and/or LLM-based analysis
+3. **Calculates visibility scores** with Wilson confidence intervals
+4. **Compares against competitors** to see where you stand
+5. **Tracks trends over time** to see if visibility is improving
 
-### Prerequisites
+## Key Features
 
-- Python 3.12+
-- Ollama (for local LLMs)
-- Node.js 20+ (for frontend)
+- **Multi-model support** -- query Ollama (local), OpenAI, Anthropic, and HuggingFace from one config
+- **Statistical analysis** -- confidence intervals, variance analysis, anomaly detection
+- **Prompt variations** -- auto-generate prompt variations to reduce bias
+- **Auto-prompt generation** -- generate brand-relevant prompts from domain context
+- **CLI + Web Dashboard** -- command-line interface and Next.js dashboard
+- **SQLite storage** -- all results stored locally, exportable to CSV/JSON
+
+## Prerequisites
+
+- **Python 3.9+** -- [python.org/downloads](https://www.python.org/downloads/)
+- **Ollama** (recommended) -- [ollama.com/download](https://ollama.com/download)
+- **Node.js 18+** (optional, for the web dashboard) -- [nodejs.org](https://nodejs.org/)
+
+## Quick Start
+
+### 1. Install
+
+```bash
+git clone https://github.com/ShaunM89/open-prompt-visibility.git
+cd open-prompt-visibility
+pip install -e .
+```
+
+### 2. Set up Ollama
+
+```bash
+# Install Ollama from https://ollama.com/download, then:
+ollama pull nemotron-3-nano:4b
+```
+
+### 3. Configure your brands
+
+Edit `configs/users/brands.yaml` with your brand and competitors:
+
+```yaml
+brands:
+  - name: "YourBrand"
+    keywords: ["YourBrand", "your brand"]
+    competitors:
+      - name: "Competitor1"
+        keywords: ["Competitor1"]
+      - name: "Competitor2"
+        keywords: ["Competitor2"]
+```
+
+Edit `configs/users/prompts.yaml` with prompts relevant to your industry:
+
+```yaml
+prompts:
+  - "What are the best products in [your industry]?"
+  - "Compare the top brands for [your use case]"
+```
+
+### 4. Run tracking
+
+```bash
+pvt run --config configs/default.yaml
+```
+
+### 5. View results
+
+```bash
+# View brand trends with confidence intervals
+pvt trends "YourBrand" --days 30 --ci 95
+
+# View database statistics
+pvt stats
+
+# Export results
+pvt export --format csv --output results.csv
+```
+
+## CLI Reference
+
+| Command | Description |
+|---------|-------------|
+| `pvt run` | Run a tracking batch across all configured models |
+| `pvt run --enable-variations` | Run with auto-generated prompt variations |
+| `pvt run --enable-auto-gen` | Run with auto-generated brand prompts |
+| `pvt stats` | Show database statistics |
+| `pvt trends "Brand"` | Show mention trends with confidence intervals |
+| `pvt export -f csv -o out.csv` | Export results to CSV or JSON |
+| `pvt config` | Display the active configuration |
+| `pvt serve` | Start the API server (for the web dashboard) |
+
+## Web Dashboard
+
+The project includes a Next.js dashboard for visual analysis.
 
 ### Setup
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-cd frontend && npm install
+# Terminal 1: Start the API server
+pvt serve
 
-# Configure
-cp .env.example .env
-# Edit .env with your API keys (or set to empty for mock)
-
-# Run
-python main.py
-cd ../frontend && npm run dev
+# Terminal 2: Start the dashboard
+cd frontend
+npm install
+npm run dev
 ```
 
-Visit: http://localhost:3000
+Open [http://localhost:3000](http://localhost:3000) to view the dashboard.
 
-## 📊 Dashboard Components
+The dashboard provides:
+- Visibility score with confidence intervals
+- Competitor comparison charts
+- Paginated prompt results with filtering
+- Run history with success rates
+- Statistical summary with anomaly detection
 
-- **VisibilityScoreCard**: Overall score with trend and breakdown
-- **QuickStats**: Key metrics (mentions, models, queries)
-- **CompetitorComparisonChart**: Brand vs. competitor analysis
-- **PromptTable**: Detailed prompt results with pagination
-- **RunHistoryPanel**: Monitoring of analysis runs
+## Configuration
 
-## 🛠️ Tech Stack
+The tool uses YAML configuration files in `configs/`:
 
-**Backend:**
-- Python 3.12
-- FastAPI
-- SQLite/PostgreSQL
-- FastLLM for model management
+- `configs/default.yaml` -- main config entry point
+- `configs/tool/config.yaml` -- model settings, tracking parameters, detection method
+- `configs/users/brands.yaml` -- your brands and competitors
+- `configs/users/prompts.yaml` -- test prompts
 
-**Frontend:**
-- Next.js 14
-- TypeScript
-- Tailwind CSS
-- Recharts for visualizations
+See [CONFIG.md](CONFIG.md) for the full configuration reference.
 
-## 📝 Configuration
+### Environment Variables
 
-See `CONFIG.md` and `configs/` directory for:
-- API key settings
-- Brand definitions
-- Prompt tracking settings
-- Model configuration
-
-## 🧪 Testing
+For cloud LLM providers, set API keys in a `.env` file (see `.env.example`):
 
 ```bash
-# Run API tests
-python -m pytest tests/
-
-# Test API endpoints
-python test_api.py
+OPENAI_API_KEY=sk-your-key
+ANTHROPIC_API_KEY=your-key
+OLLAMA_HOST=http://localhost:11434  # optional, defaults to localhost
 ```
 
-## 📂 Project Structure
+## How It Works
 
 ```
-├── frontend/          # Next.js dashboard
-├── src/              # Python backend
-│   ├── analyzer.py   # Statistical analysis
-│   ├── tracker.py    # Batch prompting
-│   ├── storage.py    # Database access
-│   └── api/          # Endpoint modules
-├── configs/          # Configuration files
-├── tests/            # Test suite
-└── README.md         # This file
+configs/ --> VisibilityTracker --> ModelAdapters (Ollama/OpenAI/Anthropic/HF)
+                  |                        |
+                  v                        v
+           PromptGenerator          LLM Responses
+                  |                        |
+                  v                        v
+           MentionDetector -----> TrackDatabase (SQLite)
+                                          |
+                                          v
+                                   AnalyticsEngine --> CLI / API / Dashboard
 ```
 
-## 🔗 API Endpoints
+1. **VisibilityTracker** loads config and orchestrates the tracking run
+2. **PromptGenerator** creates prompt variations and auto-generates prompts
+3. **ModelAdapters** send prompts to configured LLMs
+4. **MentionDetector** scans responses for brand mentions (keyword + LLM hybrid)
+5. **TrackDatabase** stores all results in SQLite
+6. **AnalyticsEngine** calculates statistics, confidence intervals, and anomalies
+7. Results are surfaced via CLI commands, FastAPI endpoints, or the Next.js dashboard
 
-| Endpoint | Description |
-|------ - ---|
-| `/api/data` | Get brand data |
-| `/api/statistical-summary` | Statistical metrics |
-| `/api/competitors` | Competitor analysis |
-| `/api/prompts` | Prompts list |
-| `/api/run-history` | Run history |
+## Contributing
 
-## 📚 Documentation
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contribution guidelines.
 
-- [Enhancement Plan](ENHANCEMENT_PLAN.md) - Future improvements
-- [Implementation Brief](IMPLEMENTATION_BRIEF.md) - Current scope
-- [Configuration Guide](CONFIG.md) - Setup instructions
+## License
 
-## 🤝 Contributing
-
-Pull requests welcome! Please read the code and submit issues for bugs.
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) file for details.
-
-## 💬 Support
-
-For issues, please create a GitHub issue. For questions, open a discussion.
-
----
-
-**Built with ❤️ for AI transparency and visibility tracking**
+MIT -- see [LICENSE](LICENSE) for details.
