@@ -455,6 +455,106 @@ async def get_statistical_summary(
     }
 
 
+@router.get("/sentiment")
+async def get_sentiment(
+    run_id: int = Query(..., description="Run ID to get sentiment for"),
+):
+    """Get sentiment analysis results for a run."""
+    conn = _db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, run_metadata, started_at, completed_at FROM runs WHERE id = ?",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        metadata = {}
+        raw = row["run_metadata"] if "run_metadata" in row.keys() else None
+        if raw:
+            try:
+                metadata = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        sentiment = metadata.get("sentiment")
+
+        if sentiment:
+            return {
+                "run_id": run_id,
+                "mode": "fast",
+                "started_at": str(row["started_at"]),
+                "completed_at": str(row["completed_at"]),
+                "brands": sentiment,
+            }
+
+        records = _db.get_by_run(run_id)
+        detailed_sentiment = {}
+        for record in records:
+            mentions_raw = record.get("mentions_json", "{}")
+            if isinstance(mentions_raw, str):
+                mentions = _db._normalize_mentions(mentions_raw)
+            else:
+                mentions = mentions_raw
+
+            for brand, data in mentions.items():
+                if isinstance(data, dict) and "sentiment" in data:
+                    if brand not in detailed_sentiment:
+                        detailed_sentiment[brand] = []
+                    detailed_sentiment[brand].append(data["sentiment"])
+
+        if detailed_sentiment:
+            brand_summaries = {}
+            for brand, scores in detailed_sentiment.items():
+                n = len(scores)
+                avg_prom = sum(s.get("prominence", 0) for s in scores) / n
+                avg_sent = sum(s.get("sentiment", 0) for s in scores) / n
+                avg_comp = sum(s.get("composite", 0) for s in scores) / n
+                brand_summaries[brand] = {
+                    "avg_prominence": round(avg_prom, 3),
+                    "avg_sentiment": round(avg_sent, 3),
+                    "avg_composite": round(avg_comp, 3),
+                    "sample_size": n,
+                    "scores": scores,
+                }
+
+            return {
+                "run_id": run_id,
+                "mode": "detailed",
+                "started_at": str(row["started_at"]),
+                "completed_at": str(row["completed_at"]),
+                "brands": brand_summaries,
+            }
+
+        return {
+            "run_id": run_id,
+            "mode": "none",
+            "message": "No sentiment data available for this run",
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/sentiment-latest")
+async def get_sentiment_latest():
+    """Get sentiment data for the latest completed run."""
+    conn = _db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM runs WHERE completed_at IS NOT NULL ORDER BY id DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {"mode": "none", "message": "No completed runs found"}
+        run_id = row["id"]
+    finally:
+        conn.close()
+    return await get_sentiment(run_id=run_id)
+
+
 @router.get("/convergence-status")
 async def get_convergence_status(
     run_id: int = Query(..., description="Run ID to check convergence for"),
@@ -480,6 +580,7 @@ async def get_convergence_status(
                 pass
 
         convergence = metadata.get("convergence")
+        sentiment = metadata.get("sentiment")
         if not convergence:
             return {
                 "run_id": run_id,
@@ -487,7 +588,10 @@ async def get_convergence_status(
                 "message": "Run did not use adaptive sampling or has no convergence data",
             }
 
-        return {"run_id": run_id, **convergence}
+        result = {"run_id": run_id, **convergence}
+        if sentiment:
+            result["sentiment"] = sentiment
+        return result
     finally:
         conn.close()
 

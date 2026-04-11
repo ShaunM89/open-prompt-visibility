@@ -63,6 +63,23 @@ brands:
 | `detection_method` | `keyword`, `llm`, or `both` | `both` |
 | `llm_detection.model` | Model for LLM-based detection | `gemma4:e2b` |
 
+### Analysis LLM
+| Field | Description | Default |
+|-------|-------------|---------|
+| `analysis.provider` | Provider for analysis tasks (detection, sentiment) | `ollama` |
+| `analysis.model` | Model for analysis (separate from test models) | `gemma4:e2b` |
+| `analysis.temperature` | Temperature for analysis calls | `0.1` |
+| `analysis.endpoint` | Custom endpoint (Ollama) | `http://localhost:11434` |
+
+### Sentiment Analysis
+| Field | Description | Default |
+|-------|-------------|---------|
+| `sentiment.mode` | `fast` (post-batch), `detailed` (per-query), or `off` | `fast` |
+
+**Fast mode** (default): After the tracking run completes, runs 1 LLM call per brand to assess overall sentiment. Cheap, stored in run metadata.
+
+**Detailed mode**: Runs sentiment analysis on every query response using the analysis LLM. Tracks convergence on composite score (prominence × sentiment). More LLM calls but analysis uses the free local model.
+
 ### Prompts
 ```yaml
 prompts:
@@ -114,6 +131,49 @@ pvt run --model-only ollama:gemma4:e2b --enable-variations --verbose
 ```
 
 Format: `provider:model_name` (e.g., `ollama:gemma4:e2b`, `openai:gpt-4o`, `anthropic:claude-3-sonnet-20240229`).
+
+## Sentiment Analysis
+
+Enable sentiment detection to measure how brands are portrayed in LLM responses, not just whether they're mentioned.
+
+### Fast mode (default)
+
+```bash
+# Post-batch sentiment — 1 LLM call per brand after the run completes
+pvt run --sentiment-mode fast
+```
+
+```yaml
+# Or in config:
+sentiment:
+  mode: "fast"
+```
+
+Results are stored in run metadata and displayed in the Sentiment tab.
+
+### Detailed mode
+
+```bash
+# Per-query sentiment — analyzes every response using the analysis LLM
+pvt run --sentiment-mode detailed
+```
+
+```bash
+# Use a different analysis model
+pvt run --sentiment-mode detailed --analysis-model ollama:nemotron-3-nano:4b
+```
+
+Detailed mode provides per-response composite scores (prominence × sentiment, range -1 to +1) and tracks convergence. The analysis LLM is separate from the test model, so analysis calls are free when using a local model.
+
+### Composite Score
+
+`composite = prominence × sentiment`
+
+- **Prominence** (0-1): How prominently the brand is featured (position, frequency)
+- **Sentiment** (-1 to +1): Positive, neutral, or negative portrayal
+- **Composite** (-1 to +1): Combined score used for convergence tracking in detailed mode
+
+Dashboard color coding: Green (+0.3 to +1.0), Yellow (-0.3 to +0.3), Red (-1.0 to -0.3).
 
 ## Using Fast Models (Nemotron example)
 

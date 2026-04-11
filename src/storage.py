@@ -169,6 +169,19 @@ class TrackDatabase:
         finally:
             conn.close()
 
+    def update_record_sentiment(self, record_id: int, mentions_json: str) -> None:
+        """Update mentions_json for an existing record (post-batch sentiment)."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE visibility_records SET mentions_json = ? WHERE id = ?",
+                (mentions_json, record_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_recent_runs(self, days: int = 90) -> List[Dict[str, Any]]:
         """Get recent runs within specified days."""
         conn = self._get_connection()
@@ -529,13 +542,37 @@ class TrackDatabase:
         if not mentions_json or mentions_json == "{}":
             return ""
         try:
-            mentions = json.loads(mentions_json)
+            mentions = self._normalize_mentions(mentions_json)
             parts = []
-            for brand, count in sorted(mentions.items()):
-                parts.append(f"{brand} ({count})")
+            for brand, data in sorted(mentions.items()):
+                count = data.get("count", 0) if isinstance(data, dict) else data
+                sentiment_info = ""
+                if isinstance(data, dict) and "sentiment" in data:
+                    s = data["sentiment"]
+                    comp = s.get("composite", 0)
+                    sentiment_info = f", composite: {comp:+.2f}"
+                parts.append(f"{brand} ({count}{sentiment_info})")
             return "; ".join(parts) if parts else ""
-        except:
+        except Exception:
             return mentions_json or ""
+
+    def _normalize_mentions(self, mentions_json: str) -> Dict[str, Any]:
+        """Parse mentions_json handling both old and new formats.
+
+        Old: {"Nike": 2}
+        New: {"Nike": {"count": 2, "sentiment": {...}}}
+        Always returns new format.
+        """
+        raw = json.loads(mentions_json)
+        normalized = {}
+        for brand, value in raw.items():
+            if isinstance(value, int):
+                normalized[brand] = {"count": value}
+            elif isinstance(value, dict):
+                normalized[brand] = value
+            else:
+                normalized[brand] = {"count": int(value)}
+        return normalized
 
     def _get_emoji_message(self, mentions: Dict[str, int]) -> str:
         """Get emoji message for detected mentions."""

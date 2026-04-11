@@ -5,12 +5,11 @@ import math
 import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import OllamaAdapter
+from .models import OllamaAdapter, create_adapter
 from .storage import TrackDatabase
 
 
@@ -158,6 +157,264 @@ Return ONLY valid JSON:
             return keyword_mentions
 
 
+@dataclass
+class MentionContext:
+    brand: str
+    snippet: str
+    position: float
+    mention_ordinal: int
+    position_label: str
+
+
+class MentionContextExtractor:
+    """Pure text processing — extracts mention contexts with position metadata."""
+
+    def __init__(self, brands_config: Dict[str, dict]):
+        self.brands_config = brands_config
+
+    def extract(self, response_text: str, brand: str) -> List[MentionContext]:
+        if not response_text or brand not in self.brands_config:
+            return []
+
+        total_length = len(response_text)
+        if total_length == 0:
+            return []
+
+        keywords = self.brands_config[brand].get("keywords", [brand])
+        contexts = []
+        seen_positions = set()
+
+        for keyword in keywords:
+            pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+            for match in pattern.finditer(response_text):
+                start = match.start()
+                if start in seen_positions:
+                    continue
+                seen_positions.add(start)
+
+                snippet = self._extract_snippet(response_text, match.start(), match.end())
+                position = match.start() / total_length
+                ordinal = len(contexts) + 1
+
+                if position < 0.33:
+                    label = "early"
+                elif position < 0.66:
+                    label = "middle"
+                else:
+                    label = "late"
+
+                contexts.append(
+                    MentionContext(
+                        brand=brand,
+                        snippet=snippet,
+                        position=round(position, 3),
+                        mention_ordinal=ordinal,
+                        position_label=label,
+                    )
+                )
+
+        return contexts
+
+    def _extract_snippet(
+        self, text: str, match_start: int, match_end: int, window: int = 150
+    ) -> str:
+        snippet_start = max(0, match_start - window)
+        snippet_end = min(len(text), match_end + window)
+        snippet = text[snippet_start:snippet_end].strip()
+
+        if snippet_start > 0:
+            snippet = "..." + snippet
+        if snippet_end < len(text):
+            snippet = snippet + "..."
+
+        return snippet
+
+
+@dataclass
+class SentimentResult:
+    prominence: float
+    sentiment: float
+    composite_score: float
+    contexts: Optional[List[Dict[str, Any]]] = None
+    summary: Optional[str] = None
+
+
+POSITIVE_WORDS = {
+    "best": 0.6,
+    "leading": 0.5,
+    "recommend": 0.7,
+    "excellent": 0.8,
+    "top": 0.5,
+    "great": 0.6,
+    "outstanding": 0.8,
+    "superior": 0.7,
+    "innovative": 0.5,
+    "popular": 0.4,
+    "trusted": 0.5,
+    "reliable": 0.4,
+    "quality": 0.4,
+    "premium": 0.5,
+    "favorite": 0.6,
+    "iconic": 0.5,
+}
+
+NEGATIVE_WORDS = {
+    "avoid": -0.5,
+    "worse": -0.4,
+    "disappointing": -0.6,
+    "overrated": -0.5,
+    "bad": -0.5,
+    "poor": -0.5,
+    "terrible": -0.7,
+    "worst": -0.7,
+    "inferior": -0.5,
+    "problem": -0.3,
+    "issue": -0.2,
+    "expensive": -0.2,
+    "declining": -0.4,
+    "struggling": -0.3,
+    "controversial": -0.3,
+}
+
+
+class SentimentHeuristics:
+    """Keyword-based sentiment fallback — no LLM needed."""
+
+    def score(self, snippet: str, position_label: str, total_brands_in_context: int = 1) -> float:
+        text_lower = snippet.lower()
+        pos_score = sum(s for w, s in POSITIVE_WORDS.items() if w in text_lower)
+        neg_score = sum(s for w, s in NEGATIVE_WORDS.items() if w in text_lower)
+
+        sentiment = max(-1.0, min(1.0, pos_score + neg_score))
+
+        prominence = 0.5
+        if position_label == "early":
+            prominence += 0.2
+        elif position_label == "late":
+            prominence -= 0.1
+
+        if total_brands_in_context >= 5:
+            prominence -= 0.3
+        elif total_brands_in_context >= 3:
+            prominence -= 0.1
+
+        prominence = max(0.0, min(1.0, prominence))
+        return round(prominence * sentiment, 3)
+
+
+class SentimentAnalyzer:
+    """Sentiment analysis using a separate analysis LLM."""
+
+    def __init__(self, config: dict):
+        analysis_config = config.get("analysis", {})
+        adapter_config = {
+            "provider": analysis_config.get("provider", "ollama"),
+            "model": analysis_config.get("model", "gemma4:e2b"),
+            "temperature": analysis_config.get("temperature", 0.1),
+        }
+        endpoint = analysis_config.get("endpoint")
+        if endpoint:
+            adapter_config["endpoint"] = endpoint
+
+        self.adapter = create_adapter(adapter_config)
+        self.mode = config.get("sentiment", {}).get("mode", "fast")
+        self.heuristics = SentimentHeuristics()
+
+    def analyze_fast(self, brand: str, mention_contexts: List[MentionContext]) -> SentimentResult:
+        if not mention_contexts:
+            return SentimentResult(prominence=0.0, sentiment=0.0, composite_score=0.0)
+
+        sample = mention_contexts[:20]
+        prompt = self._build_fast_prompt(brand, sample)
+
+        try:
+            raw = self.adapter.query(prompt)
+            parsed = self._parse_llm_response(raw)
+            return SentimentResult(
+                prominence=parsed.get("aggregate", {}).get("prominence", 0.0),
+                sentiment=parsed.get("aggregate", {}).get("sentiment", 0.0),
+                composite_score=parsed.get("aggregate", {}).get("composite_score", 0.0),
+                contexts=parsed.get("contexts"),
+                summary=parsed.get("aggregate", {}).get("summary"),
+            )
+        except Exception:
+            return self._heuristic_fallback(brand, sample)
+
+    def analyze_detailed(self, brand: str, response_text: str) -> SentimentResult:
+        if not response_text:
+            return SentimentResult(prominence=0.0, sentiment=0.0, composite_score=0.0)
+
+        prompt = self._build_detailed_prompt(brand, response_text)
+
+        try:
+            raw = self.adapter.query(prompt)
+            parsed = self._parse_llm_response(raw)
+            return SentimentResult(
+                prominence=parsed.get("prominence", 0.0),
+                sentiment=parsed.get("sentiment", 0.0),
+                composite_score=parsed.get("composite_score", 0.0),
+            )
+        except Exception:
+            return SentimentResult(prominence=0.5, sentiment=0.0, composite_score=0.0)
+
+    def _build_fast_prompt(self, brand: str, contexts: List[MentionContext]) -> str:
+        context_blocks = []
+        for ctx in contexts:
+            context_blocks.append(
+                f'Context {ctx.mention_ordinal} ({ctx.position_label} in response):\n"{ctx.snippet}"'
+            )
+
+        return f"""Analyze how {brand} is portrayed across these {len(contexts)} mention contexts from separate LLM responses.
+
+For each context, assess:
+1. Prominence (0-1): how prominently is the brand featured?
+2. Sentiment (-1 to +1): is the context positive, neutral, or negative?
+
+Then provide an aggregate score.
+
+{chr(10).join(context_blocks)}
+
+Return ONLY valid JSON:
+{{
+  "contexts": [{{"prominence": 0.8, "sentiment": 0.5}}, ...],
+  "aggregate": {{
+    "prominence": 0.65,
+    "sentiment": 0.3,
+    "composite_score": 0.195,
+    "summary": "Brand is typically discussed as..."
+  }}
+}}"""
+
+    def _build_detailed_prompt(self, brand: str, response_text: str) -> str:
+        return f"""Analyze how {brand} is portrayed in this response. Assess:
+1. Prominence (0-1): how prominently is the brand featured?
+2. Sentiment (-1 to +1): positive, neutral, or negative?
+
+Return ONLY valid JSON:
+{{"prominence": 0.8, "sentiment": 0.5, "composite_score": 0.4}}"""
+
+    def _parse_llm_response(self, raw: str) -> dict:
+        text = raw.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        return json.loads(text)
+
+    def _heuristic_fallback(self, brand: str, contexts: List[MentionContext]) -> SentimentResult:
+        scores = [self.heuristics.score(ctx.snippet, ctx.position_label) for ctx in contexts]
+        avg = sum(scores) / len(scores) if scores else 0.0
+        return SentimentResult(
+            prominence=0.5,
+            sentiment=round(avg, 3),
+            composite_score=round(avg, 3),
+            summary="Heuristic fallback (LLM analysis failed)",
+        )
+
+
 class CIStrategy(ABC):
     """Abstract base class for confidence interval calculation strategies.
 
@@ -193,6 +450,80 @@ class WilsonCIStrategy(CIStrategy):
         lower = max(0.0, (centre - spread) * 100)
         upper = min(100.0, (centre + spread) * 100)
         return (lower, upper)
+
+
+T_CRITICAL_APPROX = {
+    (1, 90): 6.314,
+    (1, 95): 12.706,
+    (1, 99): 63.657,
+    (2, 90): 2.920,
+    (2, 95): 4.303,
+    (2, 99): 9.925,
+    (3, 90): 2.353,
+    (3, 95): 3.182,
+    (3, 99): 5.841,
+    (4, 90): 2.132,
+    (4, 95): 2.776,
+    (4, 99): 4.604,
+    (5, 90): 2.015,
+    (5, 95): 2.571,
+    (5, 99): 4.032,
+    (6, 90): 1.943,
+    (6, 95): 2.447,
+    (6, 99): 3.707,
+    (7, 90): 1.895,
+    (7, 95): 2.365,
+    (7, 99): 3.499,
+    (8, 90): 1.860,
+    (8, 95): 2.306,
+    (8, 99): 3.355,
+    (9, 90): 1.833,
+    (9, 95): 2.262,
+    (9, 99): 3.250,
+    (10, 90): 1.812,
+    (10, 95): 2.228,
+    (10, 99): 3.169,
+    (15, 90): 1.753,
+    (15, 95): 2.131,
+    (15, 99): 2.947,
+    (20, 90): 1.725,
+    (20, 95): 2.086,
+    (20, 99): 2.845,
+    (29, 90): 1.699,
+    (29, 95): 2.045,
+    (29, 99): 2.757,
+}
+
+
+class SentimentCIStrategy(CIStrategy):
+    """CI strategy for continuous sentiment composite scores.
+
+    Uses t-distribution for small samples (n < 30),
+    normal approximation (z=1.96) for larger samples.
+    """
+
+    def _get_t_critical(self, df: int, confidence_level: float) -> float:
+        cl = int(confidence_level)
+        if df >= 30:
+            return {90: 1.645, 95: 1.96, 99: 2.576}.get(cl, 1.96)
+        lookup_df = min(df, max(k[0] for k in T_CRITICAL_APPROX if k[0] <= df))
+        return T_CRITICAL_APPROX.get((lookup_df, cl), 2.0)
+
+    def calculate(
+        self, n: int, scores: List[float], confidence_level: float = 95.0
+    ) -> Optional[Tuple[float, float]]:
+        if n < 2 or not scores:
+            return None
+
+        mean = sum(scores) / n
+        variance = sum((s - mean) ** 2 for s in scores) / (n - 1)
+        se = math.sqrt(variance / n) if variance > 0 else 0.0
+
+        if se == 0:
+            return (mean, mean)
+
+        t = self._get_t_critical(n - 1, confidence_level)
+        return (mean - t * se, mean + t * se)
 
 
 class RunningStats:

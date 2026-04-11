@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, ErrorBar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus } from '../lib/api';
+import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, fetchLatestSentiment, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus, SentimentData } from '../lib/api';
 
-type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats' | 'settings';
+type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats' | 'sentiment' | 'settings';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -26,6 +26,7 @@ export default function Home() {
   
   const [statSummary, setStatSummary] = useState<StatisticalSummary | null>(null);
   const [convergenceStatus, setConvergenceStatus] = useState<ConvergenceStatus | null>(null);
+  const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -55,6 +56,9 @@ export default function Home() {
           const conv = await fetchConvergenceStatus(runs[0].run_id);
           setConvergenceStatus(conv);
         }
+      } else if (activeTab === 'sentiment') {
+        const sentiment = await fetchLatestSentiment();
+        setSentimentData(sentiment);
       }
       
       setLoading(false);
@@ -175,6 +179,7 @@ export default function Home() {
               { id: 'prompts', label: 'Prompt Details' },
               { id: 'history', label: 'Run History' },
               { id: 'stats', label: 'Statistics' },
+              { id: 'sentiment', label: 'Sentiment' },
               { id: 'settings', label: 'Settings' },
             ].map((tab) => (
               <button
@@ -794,6 +799,128 @@ export default function Home() {
             </div>
           )}
           </>
+        )}
+
+        {!loading && activeTab === 'sentiment' && (
+          <div className="space-y-6">
+            <div className="bg-white shadow rounded-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-medium text-gray-900">Sentiment Analysis</h2>
+                {sentimentData && sentimentData.mode !== 'none' && (
+                  <span className={`text-xs px-2 py-1 rounded ${
+                    sentimentData.mode === 'fast' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                  }`}>
+                    {sentimentData.mode === 'fast' ? 'Fast Mode' : 'Detailed Mode'}
+                  </span>
+                )}
+              </div>
+
+              {!sentimentData || sentimentData.mode === 'none' ? (
+                <div className="text-center py-12">
+                  <p className="text-gray-500">No sentiment data available for this run.</p>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Enable sentiment analysis in config or run with <code className="bg-gray-100 px-1 rounded text-xs">--sentiment-mode fast</code>
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                    {Object.entries(sentimentData.brands).map(([brandName, data]) => {
+                      const composite = data.avg_composite ?? data.composite;
+                      const prominence = data.avg_prominence ?? data.prominence;
+                      const sentiment = data.avg_sentiment ?? data.sentiment;
+                      const sampleSize = data.sample_size ?? 0;
+                      const colorClass = composite >= 0.3
+                        ? 'border-green-400 bg-green-50'
+                        : composite <= -0.3
+                        ? 'border-red-400 bg-red-50'
+                        : 'border-yellow-400 bg-yellow-50';
+                      const textColor = composite >= 0.3
+                        ? 'text-green-700'
+                        : composite <= -0.3
+                        ? 'text-red-700'
+                        : 'text-yellow-700';
+
+                      return (
+                        <div key={brandName} className={`border-l-4 ${colorClass} rounded-lg p-4 shadow-sm`}>
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="font-semibold text-gray-900">{brandName}</h3>
+                            <span className={`text-2xl font-bold ${textColor}`}>
+                              {composite >= 0 ? '+' : ''}{composite.toFixed(3)}
+                            </span>
+                          </div>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Prominence</span>
+                              <span className="font-medium text-gray-900">{prominence.toFixed(3)}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-1.5">
+                              <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${prominence * 100}%` }} />
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Sentiment</span>
+                              <span className={`font-medium ${textColor}`}>{sentiment >= 0 ? '+' : ''}{sentiment.toFixed(3)}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-1.5">
+                              <div
+                                className={`h-1.5 rounded-full ${composite >= 0 ? 'bg-green-500' : 'bg-red-500'}`}
+                                style={{ width: `${Math.min(Math.abs(sentiment) * 100, 100)}%` }}
+                              />
+                            </div>
+                            {sampleSize > 0 && (
+                              <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                <span>Sample size</span>
+                                <span>{sampleSize}</span>
+                              </div>
+                            )}
+                          </div>
+                          {data.summary && (
+                            <p className="text-xs text-gray-500 mt-3 italic border-t pt-2">{data.summary}</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {sentimentData.mode === 'detailed' && Object.entries(sentimentData.brands).some(([_, d]) => d.scores && d.scores.length > 0) && (
+                    <div className="border border-gray-200 rounded-lg p-4">
+                      <h3 className="font-medium text-gray-900 mb-3">Sentiment Over Queries</h3>
+                      <ResponsiveContainer width="100%" height={300}>
+                        <LineChart>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="query" type="number" domain={[1, 'auto']} label={{ value: 'Query #', position: 'insideBottom', offset: -5 }} />
+                          <YAxis domain={[-1, 1]} label={{ value: 'Composite Score', angle: -90, position: 'insideLeft' }} />
+                          <Tooltip />
+                          <Legend />
+                          {Object.entries(sentimentData.brands).map(([brandName, data], idx) => {
+                            if (!data.scores || data.scores.length === 0) return null;
+                            const colors = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6'];
+                            const lineData = data.scores.map((s, i) => ({ query: i + 1, [brandName]: s.composite }));
+                            return (
+                              <Line
+                                key={brandName}
+                                data={lineData}
+                                dataKey={brandName}
+                                stroke={colors[idx % colors.length]}
+                                dot={{ r: 3 }}
+                                type="monotone"
+                              />
+                            );
+                          })}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+
+                  {sentimentData.started_at && (
+                    <div className="text-xs text-gray-400 mt-4">
+                      Run #{sentimentData.run_id} | {sentimentData.started_at} → {sentimentData.completed_at}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         )}
 
         {!loading && activeTab === 'settings' && (
