@@ -9,12 +9,18 @@
 models:
   # Primary LLM for generating responses
   - provider: "ollama"
-    model: "nemotron-3-nano:4b"
+    model: "gemma4:e2b"
     endpoint: "http://localhost:11434"
     enabled: true
     temperature: 0.7
   
-  # Add additional models to compare results across LLMs
+  # Alternative models for comparison testing
+  - provider: "ollama"
+    model: "nemotron-3-nano:4b"
+    endpoint: "http://localhost:11434"
+    enabled: false
+    temperature: 0.7
+  
   - provider: "ollama"
     model: "qwen3.5:122b"
     endpoint: "http://localhost:11434"
@@ -68,7 +74,7 @@ detection:
   
   # LLM-based detection config (used when method is "llm" or "both")
   llm:
-    model: "nemotron-3-nano:4b"
+    model: "gemma4:e2b"
     temperature: 0.1
 
 # Output Configuration

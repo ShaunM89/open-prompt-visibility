@@ -7,13 +7,12 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.storage import TrackDatabase
 from src.analyzer import AnalyticsEngine
-import src.models as models
 
 router = APIRouter()
 _db = TrackDatabase()
 _engine = AnalyticsEngine(_db)
 
-_config = models.default_config() if hasattr(models, "default_config") else {"brands": []}
+_config: dict = {"brands": []}
 
 
 @router.get("/data")
