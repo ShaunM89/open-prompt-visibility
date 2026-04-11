@@ -74,6 +74,11 @@ class TrackDatabase:
                 """
             )
 
+            try:
+                cursor.execute("ALTER TABLE runs ADD COLUMN run_metadata TEXT DEFAULT '{}'")
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
         finally:
             conn.close()
@@ -93,15 +98,21 @@ class TrackDatabase:
         finally:
             conn.close()
 
-    def complete_run(self, run_id: int) -> None:
-        """Mark a run as completed."""
+    def complete_run(self, run_id: int, metadata: dict = None) -> None:
+        """Mark a run as completed, optionally storing convergence metadata."""
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute(
-                "UPDATE runs SET completed_at = ? WHERE id = ?",
-                (datetime.now(timezone.utc), run_id),
-            )
+            if metadata:
+                cursor.execute(
+                    "UPDATE runs SET completed_at = ?, run_metadata = ? WHERE id = ?",
+                    (datetime.now(timezone.utc), json.dumps(metadata), run_id),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE runs SET completed_at = ? WHERE id = ?",
+                    (datetime.now(timezone.utc), run_id),
+                )
             conn.commit()
         finally:
             conn.close()

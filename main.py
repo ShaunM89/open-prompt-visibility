@@ -100,6 +100,24 @@ def cli():
     default=None,
     help="Override config and run only this model (format: provider:model)",
 )
+@click.option(
+    "--target-ci-width",
+    type=float,
+    default=None,
+    help="Target CI width for adaptive sampling (e.g., 15.0 for ±7.5%% precision)",
+)
+@click.option(
+    "--max-queries",
+    type=int,
+    default=None,
+    help="Maximum queries per model×prompt pair for adaptive sampling",
+)
+@click.option(
+    "--convergence-scope",
+    type=click.Choice(["primary_brand", "all_tracked_brands"]),
+    default=None,
+    help="Convergence scope: primary_brand (default) or all_tracked_brands",
+)
 def run_cli(
     config: str,
     verbose: bool,
@@ -111,6 +129,9 @@ def run_cli(
     auto_gen_per_brand: int,
     add_models: tuple,
     override_model: str,
+    target_ci_width: float,
+    max_queries: int,
+    convergence_scope: str,
 ):
     """Run a full tracking batch across all configured models and prompts."""
     try:
@@ -156,6 +177,13 @@ def run_cli(
             tracker.config["tracking"]["auto_prompt_generation"]["per_brand_prompts"] = (
                 auto_gen_per_brand
             )
+        adaptive_cfg = tracker.config.setdefault("tracking", {}).setdefault("adaptive_sampling", {})
+        if target_ci_width is not None:
+            adaptive_cfg["target_ci_width"] = target_ci_width
+        if max_queries is not None:
+            adaptive_cfg["max_queries"] = max_queries
+        if convergence_scope is not None:
+            adaptive_cfg["convergence_scope"] = convergence_scope
 
         if health_check:
             console.print("\n[bold]Running health check...[/bold]")

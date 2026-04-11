@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, ErrorBar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry } from '../lib/api';
+import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus } from '../lib/api';
 
 type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats' | 'settings';
 
@@ -25,6 +25,7 @@ export default function Home() {
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   
   const [statSummary, setStatSummary] = useState<StatisticalSummary | null>(null);
+  const [convergenceStatus, setConvergenceStatus] = useState<ConvergenceStatus | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -49,6 +50,11 @@ export default function Home() {
       } else if (activeTab === 'stats') {
         const summary = await fetchStatisticalSummary(brand, days);
         setStatSummary(summary);
+        const runs = await fetchRunHistory(days);
+        if (runs.length > 0) {
+          const conv = await fetchConvergenceStatus(runs[0].run_id);
+          setConvergenceStatus(conv);
+        }
       }
       
       setLoading(false);
@@ -66,6 +72,8 @@ export default function Home() {
     }
     return acc;
   }, []) || [];
+
+  const chartModelKeys = Array.from(new Set(chartData.flatMap((d: any) => Object.keys(d)).filter((k: string) => k !== 'date'))) as string[];
 
   const radarData = visibilityScore?.by_model?.map(m => ({
     model: m.model_name,
@@ -240,7 +248,7 @@ export default function Home() {
                       <YAxis />
                       <Tooltip />
                       <Legend />
-                      {Object.keys(chartData[0] || {}).filter((k: string) => k !== 'date').map((model: string, i: number) => (
+                      {chartModelKeys.map((model: string, i: number) => (
                         <Line key={model} type="monotone" dataKey={model} stroke={`hsl(${i * 60}, 70%, 50%)`} />
                       ))}
                     </LineChart>
@@ -581,6 +589,7 @@ export default function Home() {
         )}
 
         {!loading && activeTab === 'stats' && statSummary && (
+          <>
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-medium text-gray-900 mb-4">Statistical Summary ({statSummary.brand})</h2>
             
@@ -728,6 +737,63 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {convergenceStatus && convergenceStatus.adaptive_enabled && (
+            <div className="bg-white shadow rounded-lg p-6 mt-6">
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Convergence Report (Run #{convergenceStatus.run_id})</h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="text-xs text-gray-900">Pairs Converged</p>
+                  <p className="text-lg font-bold text-gray-900">
+                    {convergenceStatus.summary.converged_pairs}/{convergenceStatus.summary.total_pairs}
+                  </p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="text-xs text-gray-900">Total Queries</p>
+                  <p className="text-lg font-bold text-gray-900">{convergenceStatus.summary.total_queries}</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="text-xs text-gray-900">Queries Saved</p>
+                  <p className="text-lg font-bold text-green-600">~{convergenceStatus.summary.estimated_queries_saved}</p>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="text-xs text-gray-900">Target CI Width</p>
+                  <p className="text-lg font-bold text-gray-900">{convergenceStatus.target_ci_width}%</p>
+                </div>
+              </div>
+              <h3 className="font-medium text-gray-900 mb-3">Per-Model Status</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {(() => {
+                  const byModel: Record<string, any[]> = {};
+                  for (const p of convergenceStatus.pairs) {
+                    if (!byModel[p.model]) byModel[p.model] = [];
+                    byModel[p.model].push(p);
+                  }
+                  return Object.entries(byModel).map(([model, pairs]) => {
+                    const primary = pairs.find((p: any) => p.brand === brand);
+                    const allDone = pairs.every((p: any) => p.converged);
+                    return (
+                      <div key={model} className={`p-3 rounded border ${allDone ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'}`}>
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="text-sm font-medium text-gray-900">{model}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded ${allDone ? 'bg-green-200 text-green-800' : 'bg-amber-200 text-amber-800'}`}>
+                            {allDone ? 'Converged' : 'Sampling'}
+                          </span>
+                        </div>
+                        {primary && (
+                          <div className="text-xs text-gray-900">
+                            {primary.queries_completed} queries | CI width: {primary.ci_width?.toFixed(1) ?? 'N/A'}%
+                            {primary.ci && <span className="ml-1">[{primary.ci[0].toFixed(1)}-{primary.ci[1].toFixed(1)}]</span>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
+          </>
         )}
 
         {!loading && activeTab === 'settings' && (

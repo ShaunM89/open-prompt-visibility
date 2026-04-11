@@ -6,7 +6,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.storage import TrackDatabase
-from src.analyzer import AnalyticsEngine
+from src.analyzer import AnalyticsEngine, AdaptiveSampler
 
 router = APIRouter()
 _db = TrackDatabase()
@@ -453,3 +453,69 @@ async def get_statistical_summary(
         "anomalies": anomalies,
         "interpretation": interpretation,
     }
+
+
+@router.get("/convergence-status")
+async def get_convergence_status(
+    run_id: int = Query(..., description="Run ID to check convergence for"),
+):
+    """Get convergence status for a completed adaptive run."""
+    conn = _db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, run_metadata FROM runs WHERE id = ?",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        metadata = {}
+        raw = row["run_metadata"] if "run_metadata" in row.keys() else None
+        if raw:
+            try:
+                metadata = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        convergence = metadata.get("convergence")
+        if not convergence:
+            return {
+                "run_id": run_id,
+                "adaptive_enabled": False,
+                "message": "Run did not use adaptive sampling or has no convergence data",
+            }
+
+        return {"run_id": run_id, **convergence}
+    finally:
+        conn.close()
+
+
+@router.get("/convergence-live")
+async def get_convergence_live():
+    """Get latest run convergence status (for frontend polling during active runs)."""
+    conn = _db._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, started_at, run_metadata FROM runs ORDER BY id DESC LIMIT 1")
+        row = cursor.fetchone()
+        if not row:
+            return {"active": False, "message": "No runs found"}
+
+        metadata = {}
+        raw = row["run_metadata"] if "run_metadata" in row.keys() else None
+        if raw:
+            try:
+                metadata = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        convergence = metadata.get("convergence")
+        return {
+            "active": convergence is not None,
+            "run_id": row["id"],
+            "convergence": convergence,
+        }
+    finally:
+        conn.close()

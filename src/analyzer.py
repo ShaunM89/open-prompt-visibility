@@ -3,10 +3,12 @@
 import json
 import math
 import re
+from abc import ABC, abstractmethod
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .models import OllamaAdapter
 from .storage import TrackDatabase
@@ -18,9 +20,7 @@ class MentionDetector:
     def __init__(self, config: dict):
         self.config = config
         self.brands = self._load_brands(config.get("brands", []))
-        self.detection_method = config.get("tracking", {}).get(
-            "detection_method", "both"
-        )
+        self.detection_method = config.get("tracking", {}).get("detection_method", "both")
 
         # Initialize LLM detector if needed
         # Check if model key exists to initialize LLM adapter
@@ -118,9 +118,7 @@ If no brands are mentioned, return {{}}.
             # Fall back to keyword detection on failure
             return self._keyword_detect(response_text)
 
-    def _llm_confirm(
-        self, response_text: str, keyword_mentions: Dict[str, int]
-    ) -> Dict[str, int]:
+    def _llm_confirm(self, response_text: str, keyword_mentions: Dict[str, int]) -> Dict[str, int]:
         """Use LLM to confirm keyword-drafted mentions."""
         if not self.llm_adapter:
             return keyword_mentions
@@ -158,6 +156,233 @@ Return ONLY valid JSON:
         except Exception:
             # LLM failed, return keyword results
             return keyword_mentions
+
+
+class CIStrategy(ABC):
+    """Abstract base class for confidence interval calculation strategies.
+
+    Designed for extensibility: binary mention detection uses WilsonCIStrategy.
+    Future sentiment/prominence scoring (issue #3) can add TDistributionCIStrategy,
+    BootstrapCIStrategy, etc. without modifying the convergence pipeline.
+    """
+
+    @abstractmethod
+    def calculate(
+        self, n: int, scores: List[float], confidence_level: float = 95.0
+    ) -> Optional[Tuple[float, float]]:
+        pass
+
+
+class WilsonCIStrategy(CIStrategy):
+    """Wilson score confidence interval for binomial proportions (0/1 scores)."""
+
+    Z_SCORES = {90: 1.645, 95: 1.96, 99: 2.576}
+
+    def calculate(
+        self, n: int, scores: List[float], confidence_level: float = 95.0
+    ) -> Optional[Tuple[float, float]]:
+        if n == 0 or not scores:
+            return None
+        p = sum(scores) / n
+        if p == 0:
+            return None
+        z = self.Z_SCORES.get(int(confidence_level), 1.96)
+        denominator = 1 + z**2 / n
+        centre = (p + z**2 / (2 * n)) / denominator
+        spread = (z * math.sqrt((p * (1 - p) + z**2 / (4 * n)) / n)) / denominator
+        lower = max(0.0, (centre - spread) * 100)
+        upper = min(100.0, (centre + spread) * 100)
+        return (lower, upper)
+
+
+class RunningStats:
+    """Incremental statistics accumulator for adaptive sampling.
+
+    Accepts float scores (1.0/0.0 for binary, continuous for future sentiment).
+    Maintains running mean, CI, and CI width in O(1) per update.
+    """
+
+    def __init__(self, ci_strategy: CIStrategy, confidence_level: float = 95.0):
+        self.ci_strategy = ci_strategy
+        self.confidence_level = confidence_level
+        self.n: int = 0
+        self._sum: float = 0.0
+        self._scores: List[float] = []
+
+    def record(self, score: float) -> None:
+        self.n += 1
+        self._sum += score
+        self._scores.append(score)
+
+    @property
+    def mean_score(self) -> float:
+        return (self._sum / self.n * 100) if self.n > 0 else 0.0
+
+    @property
+    def ci(self) -> Optional[Tuple[float, float]]:
+        return self.ci_strategy.calculate(self.n, self._scores, self.confidence_level)
+
+    @property
+    def ci_width(self) -> Optional[float]:
+        interval = self.ci
+        if interval is None:
+            return None
+        return interval[1] - interval[0]
+
+    @property
+    def se(self) -> float:
+        if self.n == 0:
+            return 0.0
+        p = self._sum / self.n
+        return math.sqrt(p * (1 - p) / self.n) * 100 if 0 < p < 1 else 0.0
+
+    def converged(self, target_width: float, min_queries: int) -> bool:
+        if self.n < min_queries:
+            return False
+        width = self.ci_width
+        return width is not None and width <= target_width
+
+    def estimate_queries_to_converge(self, target_width: float) -> Optional[int]:
+        if self.n < 2 or self.ci_width is None or self.ci_width <= 0:
+            return None
+        ratio = self.ci_width / target_width
+        estimated = int(self.n * ratio * ratio)
+        return max(estimated, self.n + 1)
+
+
+@dataclass
+class ConvergencePair:
+    model: str
+    prompt: str
+    brand: str
+    queries_completed: int = 0
+    converged: bool = False
+    ci_width: Optional[float] = None
+    mean_score: float = 0.0
+    ci: Optional[Tuple[float, float]] = None
+
+
+class AdaptiveSampler:
+    """Manages per (model, prompt, brand) convergence tracking.
+
+    Default convergence scope: primary_brand -- stops when the audited brand converges.
+    Stricter mode: all_tracked_brands -- waits for every brand keyword.
+    """
+
+    def __init__(self, config: dict):
+        adaptive_config = config.get("tracking", {}).get("adaptive_sampling", {})
+        self.target_ci_width = adaptive_config.get("target_ci_width", 20.0)
+        self.min_queries = config.get("tracking", {}).get("queries_per_prompt", 10)
+        self.max_queries = adaptive_config.get("max_queries", 200)
+        self.check_interval = adaptive_config.get("check_interval", 5)
+        self.convergence_scope = adaptive_config.get("convergence_scope", "primary_brand")
+        self.confidence_level = (
+            config.get("tracking", {}).get("statistical_analysis", {}).get("confidence_level", 95)
+        )
+        self.ci_strategy = WilsonCIStrategy()
+        self._stats: Dict[str, RunningStats] = {}
+
+    def _key(self, model: str, prompt: str, brand: str) -> str:
+        return f"{model}::{prompt}::{brand}"
+
+    def record(self, model: str, prompt: str, brand: str, score: float) -> None:
+        k = self._key(model, prompt, brand)
+        if k not in self._stats:
+            self._stats[k] = RunningStats(self.ci_strategy, self.confidence_level)
+        self._stats[k].record(score)
+
+    def get_stats(self, model: str, prompt: str, brand: str) -> Optional[RunningStats]:
+        return self._stats.get(self._key(model, prompt, brand))
+
+    def should_stop(
+        self, model: str, prompt: str, primary_brand: str, all_brands: Optional[List[str]] = None
+    ) -> bool:
+        if self.convergence_scope == "primary_brand":
+            stats = self.get_stats(model, prompt, primary_brand)
+            if stats is None:
+                return False
+            return stats.converged(self.target_ci_width, self.min_queries)
+        elif self.convergence_scope == "all_tracked_brands":
+            brands = all_brands or [primary_brand]
+            for brand in brands:
+                stats = self.get_stats(model, prompt, brand)
+                if stats is None or not stats.converged(self.target_ci_width, self.min_queries):
+                    return False
+            return True
+        return False
+
+    def estimate_remaining(self, model: str, prompt: str, brand: str) -> Optional[int]:
+        stats = self.get_stats(model, prompt, brand)
+        if stats is None:
+            return self.max_queries
+        est = stats.estimate_queries_to_converge(self.target_ci_width)
+        if est is None:
+            return self.max_queries
+        return min(est, self.max_queries)
+
+    def get_status(
+        self, primary_brand: str, all_brands: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        pairs: List[Dict[str, Any]] = []
+        models_prompts: Dict[str, Dict[str, Any]] = {}
+
+        for k, stats in self._stats.items():
+            parts = k.split("::", 2)
+            if len(parts) != 3:
+                continue
+            model, prompt, brand = parts
+            mp_key = f"{model}::{prompt}"
+            if mp_key not in models_prompts:
+                models_prompts[mp_key] = {
+                    "model": model,
+                    "prompt": prompt,
+                    "brands": {},
+                    "queries_completed": 0,
+                    "converged": False,
+                }
+
+            pair_info = {
+                "brand": brand,
+                "queries_completed": stats.n,
+                "mean_score": round(stats.mean_score, 2),
+                "ci_width": round(stats.ci_width, 2) if stats.ci_width else None,
+                "ci": (round(stats.ci[0], 2), round(stats.ci[1], 2)) if stats.ci else None,
+                "converged": stats.converged(self.target_ci_width, self.min_queries),
+            }
+            models_prompts[mp_key]["brands"][brand] = pair_info
+            if brand == primary_brand:
+                models_prompts[mp_key]["queries_completed"] = stats.n
+                models_prompts[mp_key]["converged"] = pair_info["converged"]
+                models_prompts[mp_key]["ci_width"] = pair_info["ci_width"]
+
+            pairs.append(
+                {
+                    "model": model,
+                    "prompt": prompt,
+                    "brand": brand,
+                    **pair_info,
+                }
+            )
+
+        total_pairs = len(models_prompts)
+        converged_pairs = sum(1 for v in models_prompts.values() if v["converged"])
+        total_queries = sum(v["queries_completed"] for v in models_prompts.values())
+        max_possible = total_pairs * self.max_queries
+
+        return {
+            "adaptive_enabled": True,
+            "target_ci_width": self.target_ci_width,
+            "max_queries": self.max_queries,
+            "convergence_scope": self.convergence_scope,
+            "overall_converged": converged_pairs == total_pairs and total_pairs > 0,
+            "pairs": pairs,
+            "summary": {
+                "total_pairs": total_pairs,
+                "converged_pairs": converged_pairs,
+                "total_queries": total_queries,
+                "estimated_queries_saved": max(0, max_possible - total_queries),
+            },
+        }
 
 
 class AnalyticsEngine:
@@ -214,9 +439,7 @@ class AnalyticsEngine:
             mention_rate = model_stat["mention_rate_pct"]
             total_runs = model_stat["total_runs"]
 
-            ci = self._calculate_confidence_interval(
-                mention_rate, total_runs, confidence_level
-            )
+            ci = self._calculate_confidence_interval(mention_rate, total_runs, confidence_level)
 
             variance_data[model_stat["model_name"]] = {
                 "mention_rate": mention_rate,
@@ -224,10 +447,7 @@ class AnalyticsEngine:
                 "total_mentions": model_stat["total_mentions"],
                 "confidence_interval_95": ci,
                 "standard_error": (
-                    math.sqrt(
-                        (mention_rate / 100) * (1 - mention_rate / 100) / total_runs
-                    )
-                    * 100
+                    math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs) * 100
                     if total_runs > 0
                     else 0
                 ),
@@ -239,9 +459,7 @@ class AnalyticsEngine:
         """Get trend data for a brand."""
         return self.db.get_trends(brand_keyword, days)
 
-    def compare_models(
-        self, brand_keyword: str, days: int = 30
-    ) -> List[Dict[str, Any]]:
+    def compare_models(self, brand_keyword: str, days: int = 30) -> List[Dict[str, Any]]:
         """Compare models for a brand."""
         return self.db.get_model_statistics(brand_keyword, days)
 
@@ -265,9 +483,7 @@ class AnalyticsEngine:
 
         total_mentions = sum(s["total_mentions"] for s in stats)
         total_queries = sum(s["total_runs"] for s in stats)
-        overall_rate = (
-            (total_mentions / total_queries * 100) if total_queries > 0 else 0
-        )
+        overall_rate = (total_mentions / total_queries * 100) if total_queries > 0 else 0
 
         variance_data = {}
         for model_stat in stats:
@@ -286,9 +502,7 @@ class AnalyticsEngine:
             "variance_by_model": variance_data,
         }
 
-    def get_visibility_score(
-        self, brand_keyword: str, days: int = 30
-    ) -> Dict[str, Any]:
+    def get_visibility_score(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
         """Calculate overall visibility score for a brand.
 
         Returns:
@@ -319,9 +533,7 @@ class AnalyticsEngine:
         for model_stat in self.db.get_model_statistics(brand_keyword, days):
             model_total = model_stat["total_runs"]
             model_mentions = model_stat["total_mentions"]
-            model_score = (
-                (model_mentions / model_total * 100) if model_total > 0 else 0.0
-            )
+            model_score = (model_mentions / model_total * 100) if model_total > 0 else 0.0
             model_ci = self._calculate_confidence_interval(model_score, model_total)
 
             by_model.append(
@@ -344,9 +556,7 @@ class AnalyticsEngine:
             "confidence_interval": ci,
         }
 
-    def get_competitor_comparison(
-        self, target_brand: str, days: int = 30
-    ) -> Dict[str, Any]:
+    def get_competitor_comparison(self, target_brand: str, days: int = 30) -> Dict[str, Any]:
         """Compare target brand mention rates against competitors.
 
         Args:
@@ -392,9 +602,7 @@ class AnalyticsEngine:
                     competitors_data.append(
                         {
                             "name": competitor["name"],
-                            "keywords": competitor.get(
-                                "keywords", [competitor["name"]]
-                            ),
+                            "keywords": competitor.get("keywords", [competitor["name"]]),
                         }
                     )
                 break
@@ -411,9 +619,7 @@ class AnalyticsEngine:
         target_stats = self.db.get_model_statistics(target_brand, days)
         total_target = sum(s["total_runs"] for s in target_stats)
         total_target_mentions = sum(s["total_mentions"] for s in target_stats)
-        target_score = (
-            (total_target_mentions / total_target * 100) if total_target > 0 else 0.0
-        )
+        target_score = (total_target_mentions / total_target * 100) if total_target > 0 else 0.0
 
         # Get mention rates for all competitors
         competitors_comparison = []
@@ -530,9 +736,7 @@ class AnalyticsEngine:
                             OR mentions_json LIKE ?
                         )
                     """
-                    params.extend(
-                        [f'{{"{brand_keyword}": 1}}', f'{{"{brand_keyword}": 1,%']
-                    )
+                    params.extend([f'{{"{brand_keyword}": 1}}', f'{{"{brand_keyword}": 1,%'])
 
             query += " ORDER BY detected_at DESC"
 
@@ -563,9 +767,7 @@ class AnalyticsEngine:
             prompts = []
             for row in rows:
                 mentions = json.loads(row["mentions_json"] or "{}")
-                is_success = (
-                    len(mentions) > 1
-                )  # Success if more than one brand mentioned
+                is_success = len(mentions) > 1  # Success if more than one brand mentioned
                 prompts.append(
                     {
                         "id": row["id"],
@@ -659,9 +861,7 @@ class AnalyticsEngine:
                                 # Add competitors
                                 for comp in brand.get("competitors", []):
                                     brands[comp["name"]] = {
-                                        "keywords": comp.get(
-                                            "keywords", [comp["name"]]
-                                        ),
+                                        "keywords": comp.get("keywords", [comp["name"]]),
                                         "is_target": False,
                                     }
 
@@ -740,9 +940,7 @@ class AnalyticsEngine:
                 replacement = keyword
 
             # Case-insensitive replacement
-            result = re.sub(
-                rf"\b{escaped_keyword}\b", replacement, result, flags=re.IGNORECASE
-            )
+            result = re.sub(rf"\b{escaped_keyword}\b", replacement, result, flags=re.IGNORECASE)
 
         return result
 
@@ -822,9 +1020,7 @@ class AnalyticsEngine:
             records = self.db.get_by_run(run["run_id"])
             total = len(records)
             mentions = sum(
-                1
-                for r in records
-                if brand_keyword in json.loads(r["mentions_json"] or "{}")
+                1 for r in records if brand_keyword in json.loads(r["mentions_json"] or "{}")
             )
             rate = (mentions / total * 100) if total > 0 else 0
 
@@ -845,9 +1041,7 @@ class AnalyticsEngine:
             "run_trends": run_trends,
         }
 
-    def calculate_statistical_summary(
-        self, brand_keyword: str, days: int = 30
-    ) -> Dict[str, Any]:
+    def calculate_statistical_summary(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
         """Calculate comprehensive stats with confidence intervals.
 
         Args:
@@ -879,8 +1073,7 @@ class AnalyticsEngine:
 
             # Calculate standard error
             std_err = (
-                math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs)
-                * 100
+                math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs) * 100
                 if total_runs > 0
                 else 0
             )
@@ -962,9 +1155,7 @@ class AnalyticsEngine:
 
         # Rate interpretation
         if rate < 30:
-            interpretations.append(
-                "Low brand visibility - consider campaign improvement"
-            )
+            interpretations.append("Low brand visibility - consider campaign improvement")
         elif rate < 60:
             interpretations.append("Moderate visibility - steady performance")
         else:
@@ -972,9 +1163,7 @@ class AnalyticsEngine:
 
         return "; ".join(interpretations)
 
-    def get_statistical_summary(
-        self, brand_keyword: str, days: int = 30
-    ) -> Dict[str, Any]:
+    def get_statistical_summary(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
         """Calculate comprehensive statistical summary for a brand.
 
         Includes mean, standard deviation, confidence intervals,
@@ -1022,9 +1211,7 @@ class AnalyticsEngine:
         # Calculate statistics
         n = len(run_rates)
         mean_rate = sum(run_rates) / n
-        variance = (
-            sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
-        )
+        variance = sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
         std_dev = math.sqrt(variance)
         std_error = std_dev / math.sqrt(n) if n > 0 else 0
 

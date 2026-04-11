@@ -257,6 +257,42 @@ export async function fetchRunHistory(days: number = 30): Promise<RunHistoryEntr
   }
 }
 
+export interface ConvergenceStatus {
+  run_id: number;
+  adaptive_enabled: boolean;
+  target_ci_width: number;
+  max_queries: number;
+  convergence_scope: string;
+  overall_converged: boolean;
+  pairs: ConvergencePair[];
+  summary: {
+    total_pairs: number;
+    converged_pairs: number;
+    total_queries: number;
+    estimated_queries_saved: number;
+  };
+}
+
+export interface ConvergencePair {
+  model: string;
+  prompt: string;
+  brand: string;
+  queries_completed: number;
+  converged: boolean;
+  ci_width: number | null;
+  mean_score: number;
+  ci: [number, number] | null;
+}
+
+export async function fetchConvergenceStatus(runId: number): Promise<ConvergenceStatus | null> {
+  try {
+    const data = await fetchApi('data', { run_id: runId, endpoint: 'convergence-status' });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
 export async function fetchStatisticalSummary(brand: string, days: number): Promise<StatisticalSummary> {
   try {
     const data = await fetchApi('data', { brand, days, endpoint: 'statistical-summary' });
