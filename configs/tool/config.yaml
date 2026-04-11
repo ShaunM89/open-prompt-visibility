@@ -42,6 +42,17 @@ tracking:
   # Data retention
   max_history_days: 90
   
+  # Adaptive sampling: automatically stop querying when confidence interval is narrow enough
+  # Defaults favour speed over accuracy — tune these for your precision requirements.
+  # Note: reaching tight CI widths (<10%) at moderate mention rates (~50%) may require
+  # 300+ queries. Consider raising max_queries if you need higher precision.
+  adaptive_sampling:
+    enabled: true                   # Enable adaptive stopping (set false for fixed query counts)
+    target_ci_width: 20.0           # Stop when 95% CI width < 20% (±10% precision)
+    max_queries: 200                # Hard ceiling per model×prompt pair
+    check_interval: 5               # Evaluate convergence every N queries
+    convergence_scope: "primary_brand"  # "primary_brand" or "all_tracked_brands"
+  
   # Phase 2: Statistical Analysis Configuration
   statistical_analysis:
     enabled: true

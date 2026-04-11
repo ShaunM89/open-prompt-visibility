@@ -12,7 +12,7 @@ import yaml
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-from .analyzer import AnalyticsEngine, MentionDetector
+from .analyzer import AnalyticsEngine, AdaptiveSampler, MentionDetector
 from .models import ModelAdapter, create_adapter
 from .storage import TrackDatabase
 from .prompt_generator import PromptGenerator, PromptVariation
@@ -241,18 +241,15 @@ class VisibilityTracker:
             run_id=self.db.create_run(self.config_hash), started_at=datetime.now(timezone.utc)
         )
 
-        # Get prompt generation settings
         prompt_gen_config = self.config.get("tracking", {}).get("prompt_variations", {})
         enable_variations = prompt_gen_config.get("enabled", False)
         num_variations = prompt_gen_config.get("num_variations", 3)
         variation_strategy = prompt_gen_config.get("strategy", "semantic")
 
-        # Auto-generate prompts if enabled
         auto_gen_config = self.config.get("tracking", {}).get("auto_prompt_generation", {})
         enable_auto_gen = auto_gen_config.get("enabled", False)
         auto_gen_per_brand = auto_gen_config.get("per_brand_prompts", 5)
 
-        # Process prompts with variations and/or auto-generation
         all_prompts = self._prepare_prompts(
             enable_variations,
             num_variations,
@@ -261,18 +258,45 @@ class VisibilityTracker:
             auto_gen_per_brand,
         )
 
+        adaptive_config = self.config.get("tracking", {}).get("adaptive_sampling", {})
+        adaptive_enabled = adaptive_config.get("enabled", True)
+        sampler = AdaptiveSampler(self.config) if adaptive_enabled else None
+
+        brands = [b["name"] for b in self.config.get("brands", [])]
+        primary_brand = brands[0] if brands else "Unknown"
+        all_brand_keywords = []
+        for b in self.config.get("brands", []):
+            all_brand_keywords.append(b["name"])
+            for c in b.get("competitors", []):
+                all_brand_keywords.append(c["name"])
+
+        max_retries = self.config["tracking"].get("max_retries", 3)
+        queries_per_prompt = self.config["tracking"]["queries_per_prompt"]
+
         if verbose:
             console.print(f"\n[bold]Starting visibility tracking run #{result.run_id}[/bold]")
             console.print(f"Config hash: {self.config_hash}")
-            console.print(
-                f"Batches: {len(self.adapters)} models × {len(all_prompts)} prompts × {self.config['tracking']['queries_per_prompt']} queries"
-            )
+            if adaptive_enabled and sampler:
+                console.print(
+                    f"Adaptive sampling ON: target CI width {sampler.target_ci_width}%, "
+                    f"min {sampler.min_queries}, max {sampler.max_queries} queries per pair"
+                )
+                console.print(f"  → Convergence scope: {sampler.convergence_scope}")
+            else:
+                fixed_total = (
+                    len(self.adapters)
+                    * sum(len(p) for p in all_prompts.values())
+                    * queries_per_prompt
+                )
+                console.print(
+                    f"Fixed mode: {len(self.adapters)} models × {sum(len(p) for p in all_prompts.values())} "
+                    f"prompts × {queries_per_prompt} queries = {fixed_total} total"
+                )
             if enable_variations:
                 console.print(f"  → Prompt variations enabled ({num_variations} per base prompt)")
             if enable_auto_gen:
                 console.print(f"  → Auto-generation enabled ({auto_gen_per_brand} per brand)")
 
-        # Health check
         health = self._health_check()
         enabled_models = [k for k, v in health.items() if v]
 
@@ -282,12 +306,127 @@ class VisibilityTracker:
         if verbose:
             console.print(f"\n[bold]Enabled models:[/bold] {', '.join(enabled_models)}\n")
 
-        # Get retry settings
-        max_retries = self.config["tracking"].get("max_retries", 3)
-        queries_per_prompt = self.config["tracking"]["queries_per_prompt"]
+        if adaptive_enabled and sampler:
+            self._run_adaptive(
+                result,
+                enabled_models,
+                all_prompts,
+                sampler,
+                primary_brand,
+                all_brand_keywords,
+                max_retries,
+                verbose,
+            )
+        else:
+            self._run_fixed(
+                result, enabled_models, all_prompts, queries_per_prompt, max_retries, verbose
+            )
 
-        # Total queries to run
-        total_queries = len(enabled_models) * len(all_prompts) * queries_per_prompt
+        run_metadata = {}
+        if sampler:
+            status = sampler.get_status(primary_brand, all_brand_keywords)
+            run_metadata["convergence"] = status
+            if verbose:
+                s = status["summary"]
+                console.print(f"\n[bold]Convergence summary:[/bold]")
+                console.print(f"  {s['converged_pairs']}/{s['total_pairs']} pairs converged")
+                console.print(
+                    f"  {s['total_queries']} queries used, ~{s['estimated_queries_saved']} saved vs fixed max"
+                )
+
+        result.completed_at = datetime.now(timezone.utc)
+        self.db.complete_run(result.run_id, metadata=run_metadata)
+
+        if verbose:
+            self._print_summary(result)
+
+        return result
+
+    def _run_adaptive(
+        self,
+        result: RunResult,
+        enabled_models: list,
+        all_prompts: dict,
+        sampler: AdaptiveSampler,
+        primary_brand: str,
+        all_brands: list,
+        max_retries: int,
+        verbose: bool,
+    ):
+        max_q = sampler.max_queries
+        check_interval = sampler.check_interval
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running adaptive queries...", total=None)
+
+            for model_key in enabled_models:
+                adapter = self.adapters[model_key]
+                parts = model_key.split(":", 1)
+                provider = parts[0]
+                model_name = parts[1] if len(parts) > 1 else model_key
+
+                for prompt_category, prompts in all_prompts.items():
+                    for prompt in prompts:
+                        queries = 0
+                        while queries < max_q:
+                            success, error_msg = self._execute_query(
+                                adapter, result, provider, model_name, prompt, max_retries
+                            )
+                            if success and sampler:
+                                for brand in all_brands:
+                                    mentioned = (
+                                        1.0 if brand in (result._last_mentions or {}) else 0.0
+                                    )
+                                    sampler.record(model_name, prompt, brand, mentioned)
+                            queries += 1
+                            result.total_queries += 1
+                            progress.update(
+                                task,
+                                description=(
+                                    f"  {model_name} — {prompt[:40]}... | "
+                                    f"{queries} queries, CI width: "
+                                    f"{sampler.get_stats(model_name, prompt, primary_brand).ci_width:.1f}%"
+                                    if sampler
+                                    and sampler.get_stats(model_name, prompt, primary_brand)
+                                    else f"  {model_name} — {queries} queries"
+                                ),
+                            )
+
+                            if queries >= sampler.min_queries and queries % check_interval == 0:
+                                if sampler.should_stop(
+                                    model_name, prompt, primary_brand, all_brands
+                                ):
+                                    if verbose:
+                                        stats = sampler.get_stats(model_name, prompt, primary_brand)
+                                        ci_w = (
+                                            f"{stats.ci_width:.1f}%"
+                                            if stats and stats.ci_width
+                                            else "N/A"
+                                        )
+                                        console.print(
+                                            f"  [green]Converged: {model_name} / {prompt[:40]}... "
+                                            f"after {queries} queries (CI: {ci_w})[/green]"
+                                        )
+                                    break
+
+                            time.sleep(0.5)
+
+    def _run_fixed(
+        self,
+        result: RunResult,
+        enabled_models: list,
+        all_prompts: dict,
+        queries_per_prompt: int,
+        max_retries: int,
+        verbose: bool,
+    ):
+        total_queries = (
+            len(enabled_models) * sum(len(p) for p in all_prompts.values()) * queries_per_prompt
+        )
 
         with Progress(
             SpinnerColumn(),
@@ -300,67 +439,59 @@ class VisibilityTracker:
 
             for model_key in enabled_models:
                 adapter = self.adapters[model_key]
-                parts = model_key.split(":")
+                parts = model_key.split(":", 1)
                 provider = parts[0]
                 model_name = parts[1] if len(parts) > 1 else model_key
 
                 for prompt_category, prompts in all_prompts.items():
-                    for prompt_idx, prompt in enumerate(prompts):
+                    for prompt in prompts:
                         for query_num in range(queries_per_prompt):
-                            # Retry logic
-                            success = False
-                            error_msg = None
-
-                            for attempt in range(max_retries):
-                                try:
-                                    response = adapter.query(prompt)
-                                    mentions = self.detector.detect(response)
-
-                                    self.db.record_query(
-                                        run_id=result.run_id,
-                                        model_provider=provider,
-                                        model_name=model_name,
-                                        prompt=prompt,
-                                        response_text=response,
-                                        mentions=mentions,
-                                    )
-
-                                    result.successful_queries += 1
-                                    success = True
-
-                                    if verbose and attempt > 0:
-                                        console.print(
-                                            f"  [green]Retry {attempt}/{max_retries} successful: {model_name} - {prompt[:50]}...[/green]"
-                                        )
-                                    break
-
-                                except Exception as e:
-                                    error_msg = str(e)
-                                    if verbose and attempt < max_retries - 1:
-                                        console.print(
-                                            f"  [yellow]Attempt {attempt + 1}/{max_retries} failed: {str(e)[:60]}...[/yellow]"
-                                        )
-                                    time.sleep(2**attempt)  # Exponential backoff
-
+                            success, error_msg = self._execute_query(
+                                adapter, result, provider, model_name, prompt, max_retries
+                            )
                             if not success:
-                                result.failed_queries += 1
                                 result.errors.append(
                                     f"{model_name}: {prompt[:50]}... - {error_msg}"
                                 )
-
                             result.total_queries += 1
                             progress.update(task, advance=1)
-
-                            # Small delay between queries to avoid rate limiting
                             time.sleep(0.5)
 
-        result.completed_at = datetime.now(timezone.utc)
-        self.db.complete_run(result.run_id)
+    def _execute_query(
+        self,
+        adapter,
+        result: RunResult,
+        provider: str,
+        model_name: str,
+        prompt: str,
+        max_retries: int,
+    ) -> tuple:
+        success = False
+        error_msg = None
+        for attempt in range(max_retries):
+            try:
+                response = adapter.query(prompt)
+                mentions = self.detector.detect(response)
+                self.db.record_query(
+                    run_id=result.run_id,
+                    model_provider=provider,
+                    model_name=model_name,
+                    prompt=prompt,
+                    response_text=response,
+                    mentions=mentions,
+                )
+                result.successful_queries += 1
+                result._last_mentions = mentions
+                success = True
+                break
+            except Exception as e:
+                error_msg = str(e)
+                time.sleep(2**attempt)
 
-        if verbose:
-            self._print_summary(result)
+        if not success:
+            result.failed_queries += 1
 
-        return result
+        return success, error_msg
 
     def _print_summary(self, result: RunResult) -> None:
         """Print run summary."""
