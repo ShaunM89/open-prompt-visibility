@@ -89,6 +89,18 @@ export async function GET(request: Request) {
           await proxyToBackend(`/statistical-summary?brand=${brandParam}&days=${daysParam}`)
         );
 
+      case 'convergence-status': {
+        const runId = searchParams.get('run_id') || '0';
+        return NextResponse.json(
+          await proxyToBackend(`/convergence-status?run_id=${encodeURIComponent(runId)}`)
+        );
+      }
+
+      case 'convergence-live':
+        return NextResponse.json(
+          await proxyToBackend('/convergence-live')
+        );
+
       default:
         return NextResponse.json(
           await proxyToBackend(`/overview?brand=${brandParam}&days=${daysParam}`)
