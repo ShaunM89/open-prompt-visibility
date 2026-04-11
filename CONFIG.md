@@ -7,7 +7,7 @@ Edit `configs/default.yaml`:
 ```yaml
 models:
   - provider: "ollama"
-    model: "nemotron-nano"  # Change to your preferred model
+    model: "gemma4:e2b"  # Default model
     enabled: true
 ```
 
@@ -21,14 +21,14 @@ tracking:
 ```yaml
 models:
   - provider: "ollama"
-    model: "qwen3.5:122b"
+    model: "gemma4:e2b"
     enabled: true
-    description: "High quality"
+    description: "Default"
     
   - provider: "ollama"
-    model: "nemotron-nano"
+    model: "nemotron-3-nano:4b"
     enabled: true
-    description: "Fast iteration"
+    description: "Fast comparison"
 ```
 
 Both models will run independently, allowing you to compare results.
@@ -61,7 +61,7 @@ brands:
 | `queries_per_prompt` | Repeat each prompt N times for variance | `10` |
 | `max_retries` | Retry failed queries | `3` |
 | `detection_method` | `keyword`, `llm`, or `both` | `both` |
-| `llm_detection.model` | Model for LLM-based detection | `qwen2.5:7b` |
+| `llm_detection.model` | Model for LLM-based detection | `gemma4:e2b` |
 
 ### Prompts
 ```yaml
@@ -95,14 +95,34 @@ tracking:
   queries_per_prompt: 100
 ```
 
-## Using Fast Models (Nemotron-nano example)
+## CLI Model Selection
+
+Override or add models at runtime without editing config files:
+
+```bash
+# Run only a specific model (overrides config)
+pvt run --model-only ollama:gemma4:e2b
+
+# Add a model alongside configured models
+pvt run --model ollama:nemotron-3-nano:4b
+
+# Add multiple models
+pvt run --model ollama:nemotron-3-nano:4b --model openai:gpt-4o
+
+# Combine with other flags
+pvt run --model-only ollama:gemma4:e2b --enable-variations --verbose
+```
+
+Format: `provider:model_name` (e.g., `ollama:gemma4:e2b`, `openai:gpt-4o`, `anthropic:claude-3-sonnet-20240229`).
+
+## Using Fast Models (Nemotron example)
 
 For rapid iteration, use a smaller, faster model:
 
 ```yaml
 models:
   - provider: "ollama"
-    model: "nemotron-nano"  # Fast model (~1-2s/query)
+    model: "nemotron-3-nano:4b"  # Fast model (~1-2s/query)
     enabled: true
     description: "Fast iteration"
 ```

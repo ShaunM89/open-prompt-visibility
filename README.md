@@ -41,7 +41,7 @@ pip install -e .
 
 ```bash
 # Install Ollama from https://ollama.com/download, then:
-ollama pull nemotron-3-nano:4b
+ollama pull gemma4:e2b
 ```
 
 ### 3. Configure your brands
@@ -91,6 +91,8 @@ pvt export --format csv --output results.csv
 | Command | Description |
 |---------|-------------|
 | `pvt run` | Run a tracking batch across all configured models |
+| `pvt run --model-only ollama:gemma4:e2b` | Run with only the specified model |
+| `pvt run --model ollama:gemma4:e2b` | Add a model alongside configured models |
 | `pvt run --enable-variations` | Run with auto-generated prompt variations |
 | `pvt run --enable-auto-gen` | Run with auto-generated brand prompts |
 | `pvt stats` | Show database statistics |

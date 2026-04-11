@@ -25,6 +25,16 @@ click_rich.click_rich_style = {
 console = Console()
 
 
+def _parse_model_spec(spec: str) -> tuple:
+    parts = spec.split(":", 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(
+            f"Invalid model spec: '{spec}'. Expected format: provider:model "
+            f"(e.g., ollama:gemma4:e2b, openai:gpt-4o)"
+        )
+    return parts[0], parts[1]
+
+
 @click.group()
 def cli():
     """AI Visibility Tracker - Track brand mentions in LLM responses.
@@ -78,6 +88,18 @@ def cli():
     default=5,
     help="Number of auto-generated prompts per brand (default: 5)",
 )
+@click.option(
+    "--model",
+    "add_models",
+    multiple=True,
+    help="Add a model alongside config models (format: provider:model). Can be repeated.",
+)
+@click.option(
+    "--model-only",
+    "override_model",
+    default=None,
+    help="Override config and run only this model (format: provider:model)",
+)
 def run_cli(
     config: str,
     verbose: bool,
@@ -87,29 +109,53 @@ def run_cli(
     variation_strategy: str,
     enable_auto_gen: bool,
     auto_gen_per_brand: int,
+    add_models: tuple,
+    override_model: str,
 ):
     """Run a full tracking batch across all configured models and prompts."""
     try:
         console.print(f"[blue]Loading configuration from {config}...[/blue]")
         tracker = VisibilityTracker(config)
+
+        if override_model:
+            provider, model_name = _parse_model_spec(override_model)
+            tracker.config["models"] = [
+                {
+                    "provider": provider,
+                    "model": model_name,
+                    "enabled": True,
+                    "temperature": 0.7,
+                }
+            ]
+            tracker.adapters = tracker._init_adapters()
+            console.print(f"[cyan]Model override: running only {provider}/{model_name}[/cyan]")
+        elif add_models:
+            for spec in add_models:
+                provider, model_name = _parse_model_spec(spec)
+                tracker.config["models"].append(
+                    {
+                        "provider": provider,
+                        "model": model_name,
+                        "enabled": True,
+                        "temperature": 0.7,
+                    }
+                )
+            tracker.adapters = tracker._init_adapters()
+            console.print(f"[cyan]Added {len(add_models)} model(s) from CLI[/cyan]")
         # Override config with CLI flags
         if enable_variations:
-            tracker.config.setdefault("tracking", {}).setdefault(
-                "prompt_variations", {}
-            )["enabled"] = True
-            tracker.config["tracking"]["prompt_variations"]["num_variations"] = (
-                num_variations
-            )
-            tracker.config["tracking"]["prompt_variations"]["strategy"] = (
-                variation_strategy
-            )
+            tracker.config.setdefault("tracking", {}).setdefault("prompt_variations", {})[
+                "enabled"
+            ] = True
+            tracker.config["tracking"]["prompt_variations"]["num_variations"] = num_variations
+            tracker.config["tracking"]["prompt_variations"]["strategy"] = variation_strategy
         if enable_auto_gen:
-            tracker.config.setdefault("tracking", {}).setdefault(
-                "auto_prompt_generation", {}
-            )["enabled"] = True
-            tracker.config["tracking"]["auto_prompt_generation"][
-                "per_brand_prompts"
-            ] = auto_gen_per_brand
+            tracker.config.setdefault("tracking", {}).setdefault("auto_prompt_generation", {})[
+                "enabled"
+            ] = True
+            tracker.config["tracking"]["auto_prompt_generation"]["per_brand_prompts"] = (
+                auto_gen_per_brand
+            )
 
         if health_check:
             console.print("\n[bold]Running health check...[/bold]")
@@ -118,18 +164,14 @@ def run_cli(
                 console.print("\n[green]All models available![/green]")
             else:
                 failed = [k for k, v in health.items() if not v]
-                console.print(
-                    f"\n[red]{len(failed)} model(s) unavailable:[/red] {failed}"
-                )
+                console.print(f"\n[red]{len(failed)} model(s) unavailable:[/red] {failed}")
             return
 
         console.print("\n[bold blue]Starting tracking run...[/bold blue]")
         result = tracker.run_batch(verbose=verbose)
 
         if result.failed_queries > 0:
-            console.print(
-                f"\n[yellow]Warning: {result.failed_queries} queries failed[/yellow]"
-            )
+            console.print(f"\n[yellow]Warning: {result.failed_queries} queries failed[/yellow]")
 
         sys.exit(0 if result.failed_queries == 0 else 1)
 
@@ -157,21 +199,15 @@ def run_cli(
     help="Export format (default: csv)",
 )
 @click.option("--output", "-o", required=True, help="Output file path")
-@click.option(
-    "--run-id", type=int, help="Export only a specific run (default: all history)"
-)
-@click.option(
-    "--days", "-d", default=90, help="Number of days of history to export (default: 90)"
-)
+@click.option("--run-id", type=int, help="Export only a specific run (default: all history)")
+@click.option("--days", "-d", default=90, help="Number of days of history to export (default: 90)")
 def export_cli(format: str, output: str, run_id: int, days: int):
     """Export tracking data to CSV or JSON."""
     try:
         tracker = VisibilityTracker()
 
         if run_id:
-            output_path = tracker.export_results(
-                run_id=run_id, format=format, output_path=output
-            )
+            output_path = tracker.export_results(run_id=run_id, format=format, output_path=output)
         else:
             output_path = tracker.export_results(format=format, output_path=output)
 
@@ -183,9 +219,7 @@ def export_cli(format: str, output: str, run_id: int, days: int):
 
 
 @cli.command("config")
-@click.option(
-    "--config", "-c", default="configs/default.yaml", help="Path to configuration file"
-)
+@click.option("--config", "-c", default="configs/default.yaml", help="Path to configuration file")
 @click.option("--json", "-j", "as_json", is_flag=True, help="Output as JSON")
 def config_cli(config: str, as_json: bool):
     """Display the active configuration."""
@@ -198,30 +232,22 @@ def config_cli(config: str, as_json: bool):
             console.print(json.dumps(tracker.config, indent=2, default=str))
         else:
             console.print(f"[bold]Configuration: {config}[/bold]\n")
-            console.print(
-                f"[bold]Brands:[/bold] {len(tracker.config.get('brands', []))}"
-            )
+            console.print(f"[bold]Brands:[/bold] {len(tracker.config.get('brands', []))}")
 
             prompts = tracker.config.get("prompts", {})
             console.print(f"[bold]Prompt categories:[/bold] {len(prompts)}")
             for cat, pmts in prompts.items():
                 console.print(f"  - {cat}: {len(pmts)} prompts")
 
-            models = [
-                m for m in tracker.config.get("models", []) if m.get("enabled", True)
-            ]
+            models = [m for m in tracker.config.get("models", []) if m.get("enabled", True)]
             console.print(f"[bold]Enabled models:[/bold] {len(models)}")
             for m in models:
                 console.print(f"  - {m['provider']}/{m['model']}")
 
             tracking = tracker.config.get("tracking", {})
             console.print(f"[bold]Tracking settings:[/bold]")
-            console.print(
-                f"  queries_per_prompt: {tracking.get('queries_per_prompt', 10)}"
-            )
-            console.print(
-                f"  detection_method: {tracking.get('detection_method', 'both')}"
-            )
+            console.print(f"  queries_per_prompt: {tracking.get('queries_per_prompt', 10)}")
+            console.print(f"  detection_method: {tracking.get('detection_method', 'both')}")
 
     except Exception as e:
         console.print(f"[red]Failed to load config: {e}[/red]")
@@ -229,9 +255,7 @@ def config_cli(config: str, as_json: bool):
 
 
 @cli.command("stats")
-@click.option(
-    "--days", "-d", default=90, help="Days of history to analyze (default: 90)"
-)
+@click.option("--days", "-d", default=90, help="Days of history to analyze (default: 90)")
 def stats_cli(days: int):
     """Show database statistics."""
     try:
@@ -256,9 +280,7 @@ def stats_cli(days: int):
 
 @cli.command("trends")
 @click.argument("brand", required=True)
-@click.option(
-    "--days", "-d", default=30, help="Days of history to analyze (default: 30)"
-)
+@click.option("--days", "-d", default=30, help="Days of history to analyze (default: 30)")
 @click.option("--ci", default=95, type=int, help="Confidence level (90, 95, or 99)")
 def trends_cli(brand: str, days: int, ci: int):
     """Show mention trends for a specific brand."""
@@ -299,9 +321,7 @@ def trends_cli(brand: str, days: int, ci: int):
 
 @cli.command("serve")
 @click.option("--host", default="127.0.0.1", help="API server host (default: 127.0.0.1)")
-@click.option(
-    "--port", "-p", type=int, default=8000, help="API server port (default: 8000)"
-)
+@click.option("--port", "-p", type=int, default=8000, help="API server port (default: 8000)")
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
 def serve_cli(host: str, port: int, reload: bool):
     """Start the API server for the Next.js dashboard.
@@ -319,9 +339,7 @@ def serve_cli(host: str, port: int, reload: bool):
 
     except ImportError:
         console.print("[red]uvicorn not installed.[/red]")
-        console.print(
-            "[cyan]Install with: pip install uvicorn[/cyan]"
-        )
+        console.print("[cyan]Install with: pip install uvicorn[/cyan]")
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Failed to start API server: {e}[/red]")

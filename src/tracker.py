@@ -4,7 +4,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -238,7 +238,7 @@ class VisibilityTracker:
     def run_batch(self, verbose: bool = True) -> RunResult:
         """Execute a full tracking batch across all models and prompts."""
         result = RunResult(
-            run_id=self.db.create_run(self.config_hash), started_at=datetime.utcnow()
+            run_id=self.db.create_run(self.config_hash), started_at=datetime.now(timezone.utc)
         )
 
         # Get prompt generation settings
@@ -354,7 +354,7 @@ class VisibilityTracker:
                             # Small delay between queries to avoid rate limiting
                             time.sleep(0.5)
 
-        result.completed_at = datetime.utcnow()
+        result.completed_at = datetime.now(timezone.utc)
         self.db.complete_run(result.run_id)
 
         if verbose:

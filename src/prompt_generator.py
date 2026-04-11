@@ -96,10 +96,14 @@ class PromptGenerator:
 
         # Initialize LLM adapter for semantic variations
         llm_config = config.get("tracking", {}).get("llm_detection", {})
-        if llm_config and llm_config.get("model") == "ollama":
-            self.llm_adapter = OllamaAdapter(
-                model=llm_config.get("model", "qwen2.5:7b"), temperature=0.7
-            )
+        if llm_config and llm_config.get("model"):
+            llm_provider = llm_config.get("provider", "ollama")
+            if llm_provider == "ollama":
+                self.llm_adapter = OllamaAdapter(
+                    model=llm_config["model"], temperature=llm_config.get("temperature", 0.7)
+                )
+            else:
+                self.llm_adapter = None
         else:
             self.llm_adapter = None
 
