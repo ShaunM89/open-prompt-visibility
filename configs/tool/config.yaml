@@ -4,8 +4,17 @@
 # These settings control the mechanics of running queries and storing results.
 # Users shouldn't need to change these unless tuning performance.
 
+# Analysis LLM — separate from test models
+# Used for mention detection (LLM mode), sentiment analysis, and other analysis tasks.
+# Defaults to a free local model to keep costs at zero.
+analysis:
+  provider: "ollama"
+  model: "gemma4:e2b"
+  temperature: 0.1
+
 # Model Configuration
 # Define which LLMs to query. Each enabled model runs all prompts independently.
+# These are the models being TESTED — separate from the analysis model above.
 models:
   # Primary LLM for generating responses
   - provider: "ollama"
@@ -87,6 +96,11 @@ detection:
   llm:
     model: "gemma4:e2b"
     temperature: 0.1
+
+# Sentiment Configuration
+# Controls how brand mention sentiment is analyzed.
+sentiment:
+  mode: "fast"              # "fast" (post-batch, 1 call per brand) or "detailed" (inline per-query)
 
 # Output Configuration
 output:

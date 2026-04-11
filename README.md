@@ -16,6 +16,8 @@ When someone asks ChatGPT, Claude, or a local model "What are the best running s
 
 - **Multi-model support** -- query Ollama (local), OpenAI, Anthropic, and HuggingFace from one config
 - **Statistical analysis** -- confidence intervals, variance analysis, anomaly detection
+- **Sentiment detection** -- analyze how brands are portrayed (positive/neutral/negative) with decoupled analysis LLM
+- **Adaptive sampling** -- automatically stop querying when confidence intervals narrow enough
 - **Prompt variations** -- auto-generate prompt variations to reduce bias
 - **Auto-prompt generation** -- generate brand-relevant prompts from domain context
 - **CLI + Web Dashboard** -- command-line interface and Next.js dashboard
@@ -95,6 +97,10 @@ pvt export --format csv --output results.csv
 | `pvt run --model ollama:gemma4:e2b` | Add a model alongside configured models |
 | `pvt run --enable-variations` | Run with auto-generated prompt variations |
 | `pvt run --enable-auto-gen` | Run with auto-generated brand prompts |
+| `pvt run --sentiment-mode fast` | Run with post-batch sentiment analysis |
+| `pvt run --sentiment-mode detailed` | Run with per-query sentiment analysis |
+| `pvt run --analysis-model ollama:gemma4:e2b` | Override the analysis LLM |
+| `pvt run --target-ci-width 15` | Set adaptive sampling CI target |
 | `pvt stats` | Show database statistics |
 | `pvt trends "Brand"` | Show mention trends with confidence intervals |
 | `pvt export -f csv -o out.csv` | Export results to CSV or JSON |
@@ -125,6 +131,7 @@ The dashboard provides:
 - Paginated prompt results with filtering
 - Run history with success rates
 - Statistical summary with anomaly detection
+- Sentiment analysis with color-coded brand cards
 
 ## Configuration
 
@@ -166,9 +173,11 @@ configs/ --> VisibilityTracker --> ModelAdapters (Ollama/OpenAI/Anthropic/HF)
 2. **PromptGenerator** creates prompt variations and auto-generates prompts
 3. **ModelAdapters** send prompts to configured LLMs
 4. **MentionDetector** scans responses for brand mentions (keyword + LLM hybrid)
-5. **TrackDatabase** stores all results in SQLite
-6. **AnalyticsEngine** calculates statistics, confidence intervals, and anomalies
-7. Results are surfaced via CLI commands, FastAPI endpoints, or the Next.js dashboard
+5. **SentimentAnalyzer** assesses how brands are portrayed using a separate analysis LLM
+6. **AdaptiveSampler** stops querying when confidence intervals converge
+7. **TrackDatabase** stores all results in SQLite
+8. **AnalyticsEngine** calculates statistics, confidence intervals, and anomalies
+9. Results are surfaced via CLI commands, FastAPI endpoints, or the Next.js dashboard
 
 ## Contributing
 

@@ -101,6 +101,18 @@ export async function GET(request: Request) {
           await proxyToBackend('/convergence-live')
         );
 
+      case 'sentiment': {
+        const runId = searchParams.get('run_id') || '0';
+        return NextResponse.json(
+          await proxyToBackend(`/sentiment?run_id=${encodeURIComponent(runId)}`)
+        );
+      }
+
+      case 'sentiment-latest':
+        return NextResponse.json(
+          await proxyToBackend('/sentiment-latest')
+        );
+
       default:
         return NextResponse.json(
           await proxyToBackend(`/overview?brand=${brandParam}&days=${daysParam}`)

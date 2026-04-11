@@ -118,6 +118,17 @@ def cli():
     default=None,
     help="Convergence scope: primary_brand (default) or all_tracked_brands",
 )
+@click.option(
+    "--sentiment-mode",
+    type=click.Choice(["fast", "detailed", "off"]),
+    default=None,
+    help="Sentiment analysis mode (default: from config)",
+)
+@click.option(
+    "--analysis-model",
+    default=None,
+    help="Override analysis LLM (format: provider:model)",
+)
 def run_cli(
     config: str,
     verbose: bool,
@@ -132,6 +143,8 @@ def run_cli(
     target_ci_width: float,
     max_queries: int,
     convergence_scope: str,
+    sentiment_mode: str,
+    analysis_model: str,
 ):
     """Run a full tracking batch across all configured models and prompts."""
     try:
@@ -184,6 +197,31 @@ def run_cli(
             adaptive_cfg["max_queries"] = max_queries
         if convergence_scope is not None:
             adaptive_cfg["convergence_scope"] = convergence_scope
+
+        if sentiment_mode is not None:
+            tracker.config.setdefault("sentiment", {})["mode"] = sentiment_mode
+            if hasattr(tracker, "sentiment_analyzer") and tracker.sentiment_analyzer:
+                tracker.sentiment_analyzer.mode = sentiment_mode
+
+        if analysis_model:
+            provider, model_name = _parse_model_spec(analysis_model)
+            tracker.config.setdefault("analysis", {}).update(
+                {
+                    "provider": provider,
+                    "model": model_name,
+                }
+            )
+            if hasattr(tracker, "sentiment_analyzer") and tracker.sentiment_analyzer:
+                from src.models import create_adapter
+
+                tracker.sentiment_analyzer.adapter = create_adapter(
+                    {
+                        "provider": provider,
+                        "model": model_name,
+                        "temperature": 0.1,
+                    }
+                )
+            console.print(f"[cyan]Analysis model: {provider}/{model_name}[/cyan]")
 
         if health_check:
             console.print("\n[bold]Running health check...[/bold]")

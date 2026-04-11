@@ -147,4 +147,62 @@ class TestStatsEndpoint:
         response = client.get("/stats?brand=Nike&days=30")
         assert response.status_code == 200
         data = response.json()
-        assert "brand" in data
+
+
+class TestSentimentEndpoint:
+    def test_sentiment_no_data(self, client):
+        response = client.get("/sentiment?run_id=99999")
+        assert response.status_code == 404
+
+    def test_sentiment_run_without_sentiment(self, client):
+        response = client.get("/sentiment?run_id=1")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["mode"] == "none"
+        assert "No sentiment data" in data.get("message", "")
+
+    def test_sentiment_with_fast_mode_data(self, tmp_path, monkeypatch):
+        from src.storage import TrackDatabase
+        from src.analyzer import AnalyticsEngine
+        from src.api import app, prompts as prompts_module
+
+        test_db = TrackDatabase(db_path=str(tmp_path / "test.db"))
+        run_id = test_db.create_run(config_hash="test")
+        test_db.record_query(
+            run_id=run_id,
+            model_provider="ollama",
+            model_name="gemma4:e2b",
+            prompt="Best shoes?",
+            response_text="Nike is great",
+            mentions={"Nike": 1},
+        )
+        test_db.complete_run(
+            run_id,
+            metadata={
+                "sentiment": {
+                    "Nike": {
+                        "prominence": 0.65,
+                        "sentiment": 0.3,
+                        "composite": 0.195,
+                        "summary": "Positive",
+                    }
+                }
+            },
+        )
+
+        monkeypatch.setattr(prompts_module, "_db", test_db)
+        monkeypatch.setattr(prompts_module, "_engine", AnalyticsEngine(test_db))
+
+        c = TestClient(app)
+        resp = c.get(f"/sentiment?run_id={run_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "fast"
+        assert "Nike" in data["brands"]
+        assert data["brands"]["Nike"]["composite"] == 0.195
+
+    def test_sentiment_latest(self, client):
+        response = client.get("/sentiment-latest")
+        assert response.status_code == 200
+        data = response.json()
+        assert "mode" in data

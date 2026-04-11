@@ -293,6 +293,45 @@ export async function fetchConvergenceStatus(runId: number): Promise<Convergence
   }
 }
 
+export interface SentimentBrandData {
+  prominence: number;
+  sentiment: number;
+  composite: number;
+  sample_size?: number;
+  summary?: string;
+  avg_prominence?: number;
+  avg_sentiment?: number;
+  avg_composite?: number;
+  scores?: { prominence: number; sentiment: number; composite: number }[];
+}
+
+export interface SentimentData {
+  run_id: number;
+  mode: "fast" | "detailed" | "none";
+  started_at: string;
+  completed_at: string;
+  brands: { [brand: string]: SentimentBrandData };
+  message?: string;
+}
+
+export async function fetchSentiment(runId: number): Promise<SentimentData | null> {
+  try {
+    const data = await fetchApi('data', { run_id: runId, endpoint: 'sentiment' });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+export async function fetchLatestSentiment(): Promise<SentimentData | null> {
+  try {
+    const data = await fetchApi('data', { endpoint: 'sentiment-latest' });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
 export async function fetchStatisticalSummary(brand: string, days: number): Promise<StatisticalSummary> {
   try {
     const data = await fetchApi('data', { brand, days, endpoint: 'statistical-summary' });

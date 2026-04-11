@@ -3,6 +3,7 @@
 import hashlib
 import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +13,14 @@ import yaml
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 
-from .analyzer import AnalyticsEngine, AdaptiveSampler, MentionDetector
+from .analyzer import (
+    AnalyticsEngine,
+    AdaptiveSampler,
+    MentionDetector,
+    MentionContextExtractor,
+    SentimentAnalyzer,
+    SentimentCIStrategy,
+)
 from .models import ModelAdapter, create_adapter
 from .storage import TrackDatabase
 from .prompt_generator import PromptGenerator, PromptVariation
@@ -47,6 +55,14 @@ class VisibilityTracker:
         self.generator = PromptGenerator(self.config)
         self.config_path = config_path
         self.config_hash = self._calculate_config_hash()
+
+        sentiment_mode = self.config.get("sentiment", {}).get("mode", "fast")
+        if sentiment_mode != "off":
+            self.sentiment_analyzer = SentimentAnalyzer(self.config)
+            self.context_extractor = MentionContextExtractor(self.detector.brands)
+        else:
+            self.sentiment_analyzer = None
+            self.context_extractor = None
 
     def _load_config(self, config_path: str) -> dict:
         """Load and validate configuration."""
@@ -260,7 +276,16 @@ class VisibilityTracker:
 
         adaptive_config = self.config.get("tracking", {}).get("adaptive_sampling", {})
         adaptive_enabled = adaptive_config.get("enabled", True)
+
+        sentiment_mode = self.sentiment_analyzer.mode if self.sentiment_analyzer else "off"
+        if sentiment_mode == "detailed":
+            ci_strategy = SentimentCIStrategy()
+        else:
+            ci_strategy = None
+
         sampler = AdaptiveSampler(self.config) if adaptive_enabled else None
+        if sampler and ci_strategy:
+            sampler.ci_strategy = ci_strategy
 
         brands = [b["name"] for b in self.config.get("brands", [])]
         primary_brand = brands[0] if brands else "Unknown"
@@ -316,10 +341,17 @@ class VisibilityTracker:
                 all_brand_keywords,
                 max_retries,
                 verbose,
+                sentiment_mode,
             )
         else:
             self._run_fixed(
-                result, enabled_models, all_prompts, queries_per_prompt, max_retries, verbose
+                result,
+                enabled_models,
+                all_prompts,
+                queries_per_prompt,
+                max_retries,
+                verbose,
+                sentiment_mode,
             )
 
         run_metadata = {}
@@ -333,6 +365,9 @@ class VisibilityTracker:
                 console.print(
                     f"  {s['total_queries']} queries used, ~{s['estimated_queries_saved']} saved vs fixed max"
                 )
+
+        if sentiment_mode == "fast" and self.sentiment_analyzer:
+            self._run_post_batch_sentiment(result, run_metadata, verbose)
 
         result.completed_at = datetime.now(timezone.utc)
         self.db.complete_run(result.run_id, metadata=run_metadata)
@@ -352,6 +387,7 @@ class VisibilityTracker:
         all_brands: list,
         max_retries: int,
         verbose: bool,
+        sentiment_mode: str = "fast",
     ):
         max_q = sampler.max_queries
         check_interval = sampler.check_interval
@@ -374,14 +410,27 @@ class VisibilityTracker:
                         queries = 0
                         while queries < max_q:
                             success, error_msg = self._execute_query(
-                                adapter, result, provider, model_name, prompt, max_retries
+                                adapter,
+                                result,
+                                provider,
+                                model_name,
+                                prompt,
+                                max_retries,
+                                sentiment_mode=sentiment_mode,
                             )
                             if success and sampler:
                                 for brand in all_brands:
-                                    mentioned = (
-                                        1.0 if brand in (result._last_mentions or {}) else 0.0
-                                    )
-                                    sampler.record(model_name, prompt, brand, mentioned)
+                                    if sentiment_mode == "detailed" and self.sentiment_analyzer:
+                                        comp = result._last_sentiment.get(brand, {}).get(
+                                            "composite", 0.0
+                                        )
+                                        if brand in (result._last_mentions or {}):
+                                            sampler.record(model_name, prompt, brand, comp)
+                                    else:
+                                        mentioned = (
+                                            1.0 if brand in (result._last_mentions or {}) else 0.0
+                                        )
+                                        sampler.record(model_name, prompt, brand, mentioned)
                             queries += 1
                             result.total_queries += 1
                             progress.update(
@@ -423,6 +472,7 @@ class VisibilityTracker:
         queries_per_prompt: int,
         max_retries: int,
         verbose: bool,
+        sentiment_mode: str = "fast",
     ):
         total_queries = (
             len(enabled_models) * sum(len(p) for p in all_prompts.values()) * queries_per_prompt
@@ -465,6 +515,7 @@ class VisibilityTracker:
         model_name: str,
         prompt: str,
         max_retries: int,
+        sentiment_mode: str = "fast",
     ) -> tuple:
         success = False
         error_msg = None
@@ -472,13 +523,33 @@ class VisibilityTracker:
             try:
                 response = adapter.query(prompt)
                 mentions = self.detector.detect(response)
+
+                enriched_mentions = mentions.copy()
+                if sentiment_mode == "detailed" and self.sentiment_analyzer:
+                    result._last_sentiment = {}
+                    for brand in mentions:
+                        sentiment = self.sentiment_analyzer.analyze_detailed(brand, response)
+                        enriched_mentions[brand] = {
+                            "count": mentions[brand],
+                            "sentiment": {
+                                "prominence": sentiment.prominence,
+                                "sentiment": sentiment.sentiment,
+                                "composite": sentiment.composite_score,
+                            },
+                        }
+                        result._last_sentiment[brand] = {
+                            "prominence": sentiment.prominence,
+                            "sentiment": sentiment.sentiment,
+                            "composite": sentiment.composite_score,
+                        }
+
                 self.db.record_query(
                     run_id=result.run_id,
                     model_provider=provider,
                     model_name=model_name,
                     prompt=prompt,
                     response_text=response,
-                    mentions=mentions,
+                    mentions=enriched_mentions,
                 )
                 result.successful_queries += 1
                 result._last_mentions = mentions
@@ -492,6 +563,62 @@ class VisibilityTracker:
             result.failed_queries += 1
 
         return success, error_msg
+
+    def _run_post_batch_sentiment(
+        self, result: RunResult, run_metadata: dict, verbose: bool
+    ) -> None:
+        """Post-batch fast mode: extract contexts and run 1 LLM call per brand."""
+        records = self.db.get_by_run(result.run_id)
+        if not records:
+            return
+
+        brand_responses = defaultdict(list)
+        for record in records:
+            mentions = json.loads(record.get("mentions_json") or "{}")
+            response_text = record.get("response_text", "")
+            for brand in mentions:
+                if response_text:
+                    brand_responses[brand].append(
+                        {"record_id": record["id"], "response_text": response_text}
+                    )
+
+        if not brand_responses:
+            return
+
+        if verbose:
+            console.print("\n[bold]Running post-batch sentiment analysis (fast mode)...[/bold]")
+
+        sentiment_data = {}
+        for brand, responses in brand_responses.items():
+            all_contexts = []
+            for resp in responses:
+                contexts = self.context_extractor.extract(resp["response_text"], brand)
+                for ctx in contexts:
+                    all_contexts.append(ctx)
+
+            if not all_contexts:
+                continue
+
+            sentiment_result = self.sentiment_analyzer.analyze_fast(brand, all_contexts)
+            sentiment_data[brand] = {
+                "prominence": round(sentiment_result.prominence, 3),
+                "sentiment": round(sentiment_result.sentiment, 3),
+                "composite": round(sentiment_result.composite_score, 3),
+                "sample_size": len(all_contexts),
+                "summary": sentiment_result.summary,
+            }
+
+            if verbose:
+                comp = sentiment_result.composite_score
+                color = "green" if comp >= 0.3 else "red" if comp <= -0.3 else "yellow"
+                console.print(
+                    f"  [{color}]{brand}: composite={comp:+.3f} "
+                    f"(prominence={sentiment_result.prominence:.2f}, "
+                    f"sentiment={sentiment_result.sentiment:+.2f})[/{color}]"
+                )
+
+        if sentiment_data:
+            run_metadata["sentiment"] = sentiment_data
 
     def _print_summary(self, result: RunResult) -> None:
         """Print run summary."""
