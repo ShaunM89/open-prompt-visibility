@@ -1,462 +1,456 @@
-"""API routes for prompt data and statistics."""
+"""API endpoints for prompt visibility tracking."""
 
-import hashlib
 import json
-from datetime import datetime, timedelta
-from pathlib import Path
+from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
-
-import yaml
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
-
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from src.storage import TrackDatabase
+from src.analyzer import AnalyticsEngine
+import src.models as models
 
-router = APIRouter(prefix="/api", tags=["Data"])
+router = APIRouter()
+_db = TrackDatabase()
+_engine = AnalyticsEngine(_db)
 
-
-def load_config() -> dict:
-    """Load application configuration."""
-    config_path = Path("configs/default.yaml")
-    if not config_path.exists():
-        raise HTTPException(status_code=404, detail="Configuration not found")
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+_config = models.default_config() if hasattr(models, "default_config") else {"brands": []}
 
 
-def load_brands() -> list:
-    """Load brand configuration."""
-    brands_path = Path("configs/users/brands.yaml")
-    if not brands_path.exists():
-        raise HTTPException(status_code=404, detail="Brands configuration not found")
-    with open(brands_path, "r") as f:
-        return yaml.safe_load(f).get("brands", [])
+@router.get("/data")
+async def get_data_endpoint(
+    brand: str = Query(..., description="Brand name to filter by"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get prompt results filtered by brand."""
+    records = _db.get_all_records(brand, days)
 
+    if not records:
+        return {
+            "total": 0,
+            "results": [],
+            "filters": {"brand": brand, "days": days},
+        }
 
-def detect_mentions(text: str, brands: list) -> dict:
-    """Detect which brands are mentioned in text."""
-    mentions = {}
-    for brand in brands:
-        brand_keywords = brand.get("keywords", [])
-        for keyword in brand_keywords:
-            if keyword.lower() in text.lower():
-                mentions[brand["name"]] = mentions.get(brand["name"], 0) + 1
-    return mentions
-
-
-# === Existing Data Route ===
-@router.get(
-    "/data",
-    response_model=dict,
-    summary="Get brand statistics and trends",
-    description="Retrieves mention statistics and trends for a specific brand",
-)
-async def get_data(
-    brand: str = Query(..., description="Brand name to analyze"),
-    days: int = Query(90, description="Days of history to analyze", gt=0),
-) -> dict:
-    """Get comprehensive brand statistics."""
-    db = TrackDatabase()
-    trends = db.get_trends(brand, days)
-
-    if not trends:
-        raise HTTPException(status_code=404, detail=f"No data found for brand: {brand}")
-
-    # Calculate overall stats
-    total_queries = len(trends)
-    total_mentions = sum(row.get("mention_count", 0) for row in trends)
+    response = []
+    for record in records[:100]:
+        record_data = {
+            "id": record.get("record_id", record.get("id")),
+            "prompt": record.get("prompt_text", record.get("prompt")),
+            "model": record.get("model_name"),
+            "run_id": record.get("run_id"),
+            "timestamp": record.get("detected_at", record.get("timestamp")),
+            "mentions": record.get("mentions_json", "{}"),
+        }
+        response.append(record_data)
 
     return {
-        "brand": brand,
-        "period_days": days,
-        "total_queries": total_queries,
-        "total_mentions": total_mentions,
-        "mention_rate": (total_mentions / total_queries * 100) if total_queries > 0 else 0,
-        "by_model": trends,
+        "total": len(records),
+        "results": response,
+        "filters": {"brand": brand, "days": days},
     }
 
 
-# === New: Visibility Score ===
-@router.get(
-    "/visibility-score",
-    response_model=dict,
-    summary="Get overall visibility score",
-    description="Calculates visibility score for a brand (successful prompts / total prompts * 100)",
-)
-async def get_visibility_score(
-    brand: str = Query(..., description="Brand name to analyze"),
-    days: int = Query(30, description="Days of history", gt=0),
-) -> dict:
-    """
-    Calculate visibility score for target brand.
-
-    Visibility Score = (Successful Prompts / Total Prompts) × 100
-
-    A prompt is successful if the target brand is mentioned.
-    """
-    db = TrackDatabase()
-    brand_keywords = [b.get("keywords", []) for b in load_brands() if b["name"] == brand]
-
-    # Get all mentions for this brand
-    all_records = db.get_all_records()
-
-    if not all_records:
-        raise HTTPException(status_code=404, detail="No data found")
-
-    total_prompts = 0  # Count unique prompts (not queries)
-    successful_prompts = 0
-
-    # Track unique prompts per brand mention
-    brand_mentions = set()
-
-    for record in all_records:
-        if record["timestamp"] < datetime.utcnow() - timedelta(days=days):
-            continue
-
-        # Check if this record mentions our target brand
-        mentions_str = record.get("mentions_str", "")
-        if brand in mentions_str or any(
-            kw in mentions_str for kw in brand_keywords[0] if brand_keywords
-        ):
-            prompt_key = f"{record.get('model', 'unknown')}:{record.get('prompt', 'unknown')}:{record['timestamp']}"
-            brand_mentions.add(prompt_key)
-
-    total_prompts = len(brand_mentions)
-    successful_prompts = total_prompts  # All mentioned = successful
-
-    visibility_score = (successful_prompts / total_prompts * 100) if total_prompts > 0 else 0
+@router.post("/run/start")
+async def start_run(
+    enable_variations: bool = Query(True, description="Enable prompt variations"),
+    num_variations: int = Query(3, description="Number of variations per prompt"),
+    variation_strategy: Optional[str] = Query("semantic", description="Variation strategy"),
+):
+    """Start a new tracking run with specified config options."""
+    _config.setdefault("tracking", {}).setdefault("prompt_variations", {})["enabled"] = (
+        enable_variations
+    )
+    _config["tracking"]["prompt_variations"]["num_variations"] = num_variations
+    _config["tracking"]["prompt_variations"]["strategy"] = variation_strategy
 
     return {
-        "brand": brand,
-        "period_days": days,
-        "total_prompts": total_prompts,
-        "successful_prompts": successful_prompts,
-        "visibility_score": round(visibility_score, 2),
-        "trend_indicator": "↑" if visibility_score > 70 else "→" if visibility_score > 50 else "↓",
+        "status": "started",
+        "config": _config,
     }
 
 
-# === New: Competitors ===
-@router.get(
-    "/competitors",
-    response_model=list,
-    summary="Get competitor comparison",
-    description="Comparative analysis of brand vs. competitors mention rates",
-)
-async def get_competitors(
-    brand: str = Query(..., description="Target brand"),
-    days: int = Query(30, description="Days of history", gt=0),
-) -> list:
-    """
-    Get competitive comparison for target brand and all competitors.
+@router.get("/run-history")
+async def get_recent_runs(
+    days: int = Query(90, description="Number of days of runs to include"),
+):
+    """Get history of tracking runs."""
+    return _db.get_recent_runs(days)[:10]
 
-    Shows mention rates for:
-    - Target brand
-    - All competitor brands configured in brands.yaml
-    """
-    db = TrackDatabase()
-    brands = load_brands()
 
-    # Separate target brand and competitors
-    target_brand = next((b for b in brands if b["name"] == brand), None)
-    if not target_brand:
-        raise HTTPException(status_code=404, detail=f"Brand not found: {brand}")
+@router.get("/trends")
+async def get_trends(
+    brand: str = Query(..., description="Brand to get trend data for"),
+    days: int = Query(30, description="Number of days of data"),
+):
+    """Get trend data for a brand."""
+    return _db.get_trends(brand, days)
 
-    competitors = [b for b in brands if b["name"] != brand]
 
-    # Get data for all brands
-    brand_data = []
-    for b in brands:
-        trends = db.get_trends(b["name"], days)
-        if not trends:
-            continue
+@router.get("/stats")
+async def get_stats(
+    brand: str = Query(..., description="Brand to get statistics for"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get statistical summary with confidence intervals."""
+    return _engine.calculate_statistical_summary(brand, days)
 
-        total_queries = len(trends)
-        total_mentions = sum(row.get("mention_count", 0) for row in trends)
-        rate = (total_mentions / total_queries * 100) if total_queries > 0 else 0
 
-        brand_data.append(
+@router.get("/models")
+async def get_models(
+    brand: str = Query(..., description="Brand to get model stats for"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get per-model statistics."""
+    stats = _db.get_model_statistics(brand, days)
+    model_stats = []
+    for model_stat in stats:
+        mention_rate = model_stat["mention_rate_pct"]
+        total_runs = model_stat["total_runs"]
+        ci = _engine._calculate_confidence_interval(mention_rate, total_runs, 95)
+        std_err = (
+            ((mention_rate / 100) * (1 - mention_rate / 100) / total_runs) ** 0.5 * 100
+            if total_runs > 0
+            else 0
+        )
+        model_stats.append(
             {
-                "brand": b["name"],
-                "is_target": b["name"] == brand,
-                "total_queries": total_queries,
-                "total_mentions": total_mentions,
-                "mention_rate": round(rate, 2),
+                "model_name": model_stat["model_name"],
+                "mention_rate": round(mention_rate, 2),
+                "total_runs": total_runs,
+                "mentions": model_stat["total_mentions"],
+                "confidence_interval": ci,
+                "standard_error": round(std_err, 2),
+                "statistical_significance": (
+                    "N/A"
+                    if total_runs < 30
+                    else _engine._assess_significance(mention_rate, std_err, total_runs)
+                ),
+            }
+        )
+    model_stats.sort(key=lambda x: x["mention_rate"], reverse=True)
+
+    return {"brand": brand, "models": model_stats}
+
+
+@router.get("/competitors")
+async def get_competitors(
+    brand: str = Query(..., description="Brand to compare against competitors"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get competitor comparison data."""
+    result = _engine.get_competitor_comparison(brand, days)
+
+    if not result:
+        return {
+            "target_brand": brand,
+            "target_score": 0,
+            "competitors": [],
+            "all_brands": [],
+            "period_days": days,
+        }
+
+    if "all_brands" not in result:
+        all_brands = [
+            {
+                "name": brand,
+                "score": result.get("target_score", 0),
+                "total_prompts": 0,
+                "successful_prompts": 0,
+                "is_target": True,
+            }
+        ]
+        for c in result.get("competitors", []):
+            c_copy = dict(c)
+            c_copy["is_target"] = False
+            all_brands.append(c_copy)
+        all_brands.sort(key=lambda x: x.get("score", 0), reverse=True)
+        result["all_brands"] = all_brands
+
+    return result
+
+
+@router.get("/export")
+async def export_data(
+    format: str = Query("json", description="Export format (csv, json)"),
+    days: int = Query(90, description="Days of data to export"),
+):
+    """Export tracking data to file."""
+    records = _db.get_all_records("*", days)
+
+    export_records = []
+    for record in records:
+        export_records.append(
+            {
+                "record_id": record.get("record_id", record.get("id")),
+                "timestamp": record.get("detected_at", record.get("timestamp")),
+                "brand": record.get("brand_name", record.get("prompt")),
+                "model": record.get("model_name"),
+                "prompt": record.get("prompt", record.get("prompt_text")),
+                "response": (record.get("response_text", "")[:200] + "...")
+                if record.get("response_text")
+                else "",
+                "mentions": record.get("mentions_json", "{}"),
             }
         )
 
-    return sorted(brand_data, key=lambda x: x["mention_rate"], reverse=True)
+    return {
+        "export_info": {
+            "format": format,
+            "days": days,
+            "total_records": len(export_records),
+            "exported_at": datetime.now().isoformat(),
+        },
+        "data": export_records,
+    }
 
 
-# === New: Runs History ===
-@router.get(
-    "/run-history",
-    response_model=list,
-    summary="Get tracking run history",
-    description="Lists all tracking runs with duration and success metrics",
-)
-async def get_run_history(days: int = Query(90, description="Days of run history", gt=0)) -> list:
-    """
-    Get history of tracking runs.
-
-    Each run entry includes:
-    - run_id
-    - timestamp range
-    - total queries
-    - success/failure counts
-    - duration
-    - config hash (for reproducibility)
-    """
-    db = TrackDatabase()
-    runs = db.get_all_runs()
-
-    now = datetime.utcnow()
-    cutoff = now - timedelta(days=days)
-
-    filtered_runs = []
-    for run in runs:
-        if run.get("started_at") and run["started_at"] >= cutoff:
-            # Convert ISO timestamp to datetime
-            from datetime import datetime as dt
-
-            started_dt = dt.fromisoformat(run["started_at"].replace("Z", "+00:00"))
-            started_iso = started_dt.isoformat()
-
-            # Parse completed timestamp if available
-            completed_iso = run.get("completed_at")
-            if completed_iso:
-                completed_dt = dt.fromisoformat(completed_iso.replace("Z", "+00:00"))
-                completed_iso = completed_dt.isoformat()
-
-                # Calculate duration
-                duration = (completed_dt - started_dt).total_seconds() / 3600
-            else:
-                continued_iso = run.get("started_at")
-                duration = None
-
-    return filtered_runs
+@router.get("/brands")
+async def get_brands():
+    """Get list of tracked brands from the database."""
+    brands = _db.get_unique_brands()
+    return {"brands": brands}
 
 
-@router.get(
-    "/prompts",
-    response_model=dict,
-    summary="Get prompt results listing",
-    description="Paginated list of all prompt results with filtering options",
-)
-async def get_prompts(
-    brand: Optional[str] = None,
-    model: Optional[str] = None,
-    page: int = Query(1, ge=1, description="Page number for pagination", default=1),
-    limit: int = Query(25, ge=5, le=100, description="Results per page", default=25),
-    success_only: bool = Query(False, description="Only successful results", default=False),
-    search: Optional[str] = None,
-    days: int = Query(90, description="Days of history", gt=0),
-) -> dict:
-    """
-    Get paginated list of prompt results.
+@router.get("/overview")
+async def get_overview(
+    brand: str = Query(..., description="Brand name"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get combined overview data for dashboard (stats + model stats + trends)."""
+    stats = _db.get_stats()
+    model_stats = _db.get_model_statistics(brand, days)
+    trends = _db.get_trends(brand, days)
+    return {"stats": stats, "modelStats": model_stats, "trends": trends}
 
-    Filters:
-    - brand: Filter by target brand
-    - model: Filter by model provider
-    - success_only: Only show successful results
-    - search: Search in prompt text
-    """
-    db = TrackDatabase()
-    all_records = db.get_all_records()
 
-    brand_keywords = None
-    if brand:
-        brands = load_brands()
-        target_brand = next((b for b in brands if b["name"] == brand), None)
-        if target_brand:
-            brand_keywords = target_brand.get("keywords", [])
+@router.get("/visibility-score")
+async def get_visibility_score(
+    brand: str = Query(..., description="Brand to score"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get visibility score with per-model breakdown and confidence intervals."""
+    model_stats = _db.get_model_statistics(brand, days)
+
+    total_prompts = sum(m["total_runs"] for m in model_stats)
+    successful_prompts = sum(m["total_mentions"] for m in model_stats)
+    score = (successful_prompts / total_prompts * 100) if total_prompts > 0 else 0
+
+    ci = _engine._calculate_confidence_interval(score, total_prompts, 95)
+
+    by_model = []
+    for m in model_stats:
+        m_total = m["total_runs"]
+        m_mentions = m["total_mentions"]
+        m_score = (m_mentions / m_total * 100) if m_total > 0 else 0
+        m_ci = _engine._calculate_confidence_interval(m_score, m_total, 95)
+        by_model.append(
+            {
+                "model_name": m["model_name"],
+                "model_provider": m["model_provider"],
+                "score": round(m_score, 2),
+                "total_prompts": m_total,
+                "successful_prompts": m_mentions,
+                "confidence_interval": m_ci,
+            }
+        )
+
+    return {
+        "brand": brand,
+        "score": round(score, 2),
+        "total_prompts": total_prompts,
+        "successful_prompts": successful_prompts,
+        "by_model": by_model,
+        "confidence_interval": ci,
+    }
+
+
+@router.get("/prompt-list")
+async def get_prompt_list(
+    brand: str = Query(..., description="Brand to filter by"),
+    days: int = Query(30, description="Number of days to look back"),
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(25, ge=1, le=100, description="Results per page"),
+    model: Optional[str] = Query(None, description="Filter by model name"),
+    success: Optional[bool] = Query(None, description="Filter by mention success"),
+):
+    """Get paginated prompt results for the dashboard."""
+    records = _db.get_all_records(brand, days)
 
     filtered = []
-    for record in all_records:
-        # Filter by date
-        record_time = record.get("timestamp", "")
-        if record_time:
-            from datetime import datetime as dt
+    for r in records:
+        mentions = (
+            json.loads(r.get("mentions_json", "{}"))
+            if isinstance(r.get("mentions_json"), str)
+            else r.get("mentions_json", {})
+        )
+        is_success = len(mentions) > 0
 
-            try:
-                record_dt = dt.fromisoformat(record_time.replace("Z", "+00:00"))
-                if record_dt < (dt.utcnow() - timedelta(days=days)).replace(tzinfo=dt.utcnow()):
-                    continue
-            except:
-                pass
-
-        # Filter by brand
-        if brand_keywords and brand:
-            mentions_str = record.get("mentions_str", "")
-            if not any(kw in mentions_str for kw in brand_keywords):
-                continue
-
-        # Filter by model
-        if model:
-            if "model_provider" not in record:
-                continue
-            if record["model_provider"] != model:
-                continue
-
-        # Filter by success
-        if success_only:
-            mentions_str = record.get("mentions_str", "")
-            if not mentions_str or "mentioned > 0" not in mentions_str:
-                continue
-
-        # Search in prompt
-        if search:
-            if search.lower() not in record.get("prompt", "").lower():
-                continue
+        if model and r.get("model_name") != model:
+            continue
+        if success is not None and is_success != success:
+            continue
 
         filtered.append(
             {
-                "id": record.get("id"),
-                "prompt": record.get("prompt", ""),
-                "response": record.get("response_text", ""),
-                "model": record.get("model_provider", ""),
-                "model_name": record.get("model_name", ""),
-                "timestamp": record.get("timestamp"),
-                "mentions_str": record.get("mentions_str"),
-                "success": bool(record.get("mentions_str", "")),
+                "id": r.get("id"),
+                "run_id": r.get("run_id"),
+                "model_provider": r.get("model_provider", ""),
+                "model_name": r.get("model_name", ""),
+                "prompt": r.get("prompt", ""),
+                "response_text": (r.get("response_text", "") or "")[:500],
+                "mentions": mentions,
+                "detected_at": str(r.get("detected_at", "")),
+                "is_success": is_success,
             }
         )
 
-    # Paginate
     total = len(filtered)
-    per_page = limit
-    start = (page - 1) * per_page
-    end = start + per_page
+    total_pages = max(1, (total + limit - 1) // limit)
+    start = (page - 1) * limit
+    page_results = filtered[start : start + limit]
 
     return {
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "total_pages": (total + per_page - 1) // per_page,
-        "results": filtered[start:end],
+        "prompts": page_results,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+        },
+        "filters": {
+            "brand": brand,
+            "model": model,
+            "days": days,
+            "success_filter": success,
+        },
     }
 
 
-@router.get(
-    "/prompts/{prompt_id}",
-    response_model=dict,
-    summary="Get prompt detail",
-    description="Full details for a specific prompt result including mentions highlighted",
-)
-async def get_prompt_detail(prompt_id: int) -> dict:
-    """
-    Get detailed information for a specific prompt result.
-
-    Returns:
-    - Full response text
-    - Parsed mention data (counts, positions)
-    - Metadata (run ID, model, config hash)
-    """
-    db = TrackDatabase()
-    record = db.get_record_by_id(prompt_id)
-
+@router.get("/prompt-detail/{record_id}")
+async def get_prompt_detail(record_id: int):
+    """Get a single prompt record with full response text."""
+    record = _db.get_record_by_id(record_id)
     if not record:
-        raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_id}")
+        raise HTTPException(status_code=404, detail="Record not found")
 
     return {
-        "id": record.get("id"),
-        "prompt": record.get("prompt", ""),
-        "response": record.get("response_text", ""),
-        "model": record.get("model_provider", ""),
+        "id": record["id"],
+        "run_id": record["run_id"],
+        "model_provider": record.get("model_provider", ""),
         "model_name": record.get("model_name", ""),
-        "run_id": record.get("run_id"),
-        "timestamp": record.get("timestamp"),
-        "mentions_str": record.get("mentions_str"),
-        "config_hash": record.get("config_hash", ""),
+        "prompt": record.get("prompt", ""),
+        "response_text": record.get("response", ""),
+        "mentions": record.get("mentions", {}),
+        "detected_at": str(record.get("timestamp", "")),
     }
 
 
-@router.get(
-    "/statistical-summary",
-    response_model=dict,
-    summary="Get statistical summary",
-    description="Calculates mean, std, CI, and other statistics over time period",
-)
+@router.get("/run-history-detail")
+async def get_run_history_detail(
+    days: int = Query(90, description="Number of days of runs to include"),
+):
+    """Get detailed run history with per-run statistics."""
+    runs = _db.get_all_runs(days)
+    run_history = []
+    for run in runs[:20]:
+        records = _db.get_by_run(run["id"])
+        total = len(records)
+        successful = sum(
+            1 for r in records if r.get("mentions_json") and r["mentions_json"] != "{}"
+        )
+        models_used = list({r.get("model_name", "") for r in records})
+        success_rate = round(successful / total * 100, 2) if total > 0 else 0
+
+        run_history.append(
+            {
+                "run_id": run["id"],
+                "started_at": str(run.get("started_at", "")),
+                "completed_at": str(run.get("completed_at", "")),
+                "total_queries": total,
+                "successful_queries": successful,
+                "success_rate": success_rate,
+                "models_used": models_used,
+            }
+        )
+
+    return run_history
+
+
+@router.get("/statistical-summary")
 async def get_statistical_summary(
     brand: str = Query(..., description="Brand to analyze"),
-    days: int = Query(30, description="Days of history", gt=0),
-    ci_level: int = Query(95, description="Confidence level (90, 95, 99)", gt=80, le=99),
-) -> dict:
-    """
-    Calculate comprehensive statistics with confidence intervals.
+    days: int = Query(30, description="Days of data to analyze"),
+):
+    """Get statistical summary with confidence intervals, variance, and anomaly detection."""
+    runs = _db.get_all_runs(days)
+    if not runs:
+        return {
+            "brand": brand,
+            "period_days": days,
+            "n_runs": 0,
+            "message": "No runs found",
+        }
 
-    Returns:
-    - mean_rate: Average mention rate
-    - std: Standard deviation
-    - ci_[ci_level]: Confidence interval [lower, upper]
-    - total_runs: Number of runs
-    - total_queries: Total queries analyzed
-    - sample_size_adq: Indicator if sample is adequate (std < 5)
-    """
-    db = TrackDatabase()
-    trends = db.get_trends(brand, days)
+    run_rates = []
+    for run in runs:
+        records = _db.get_by_run(run["id"])
+        total = len(records)
+        mentions = sum(
+            1
+            for r in records
+            if brand
+            in (
+                json.loads(r.get("mentions_json", "{}"))
+                if isinstance(r.get("mentions_json"), str)
+                else r.get("mentions_json", {})
+            )
+        )
+        rate = (mentions / total * 100) if total > 0 else 0
+        run_rates.append(rate)
 
-    if not trends:
-        raise HTTPException(status_code=404, detail=f"No data found for brand: {brand}")
+    if not run_rates:
+        return {
+            "brand": brand,
+            "period_days": days,
+            "n_runs": len(runs),
+            "message": "No data for brand",
+        }
 
-    # Extract all mention rates
-    mention_rates = [t.get("mention_rate", 0) for t in trends if t.get("mention_rate")]
+    n = len(run_rates)
+    mean_rate = sum(run_rates) / n
+    variance = sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
+    std_dev = variance**0.5
+    std_error = std_dev / (n**0.5) if n > 0 else 0
 
-    if not mention_rates:
-        return {"brand": brand, "period_days": days, "error": "No valid mention rates found"}
+    ci = _engine._calculate_confidence_interval(mean_rate, n, 95)
+    cv = (std_dev / mean_rate * 100) if mean_rate > 0 else 0
 
-    # Calculate basic statistics
-    n = len(mention_rates)
-    mean_rate = sum(mention_rates) / n
-
-    # Standard deviation
-    variance = sum((x - mean_rate) ** 2 for x in mention_rates) / n
-    std = variance**0.5
-
-    # Wilson score interval (simplified for large n)
-    p = mean_rate / 100  # Convert % to proportion
-    n_eff = n * (days / 30)  # Effective sample size
-    z = 1.96 if ci_level == 95 else (1.645 if ci_level == 90 else 2.576)
-
-    z_alpha = {90: 1.645, 95: 1.96, 99: 2.576}.get(ci_level, 1.96)
-    se = z_alpha * ((p * (1 - p) / n_eff) ** 0.5)
-
-    se_lower = se + z_alpha * ((p * (1 - p) / n_eff) ** 0.5)
-    se_upper = se + z_alpha * ((p * (1 - p) / n_eff) ** 0.5)
-
-    ci_lower = p - z_alpha * ((p * (1 - p) / n_eff) ** 0.5)
-    ci_upper = p + z_alpha * ((p * (1 - p) / n_eff) ** 0.5)
-    ci_lower = max(0, min(1, ci_lower)) * 100
-    ci_upper = min(100, max(0, ci_upper)) * 100
-
-    # By model
-    by_model = {}
-    for row in trends:
-        model = row.get("model_name", "")
-        if model:
-            rates = [r.get("mention_rate", 0) for r in trends if r.get("model_name") == model]
-            if rates:
-                mean_m = sum(rates) / len(rates)
-                std_m = (sum((x - mean_m) ** 2 for x in rates) / len(rates)) ** 0.5
-                by_model[model] = {
-                    "mean_rate": round(mean_m, 2),
-                    "std": round(std_m, 2),
-                    "queries": len(rates),
+    anomalies = []
+    for i, rate in enumerate(run_rates):
+        if std_dev > 0 and abs(rate - mean_rate) > 2 * std_dev:
+            anomalies.append(
+                {
+                    "run_index": i,
+                    "run_id": runs[i]["id"],
+                    "rate": round(rate, 2),
+                    "deviation": round((rate - mean_rate) / std_dev, 2),
                 }
+            )
+
+    interpretation = "Stable" if cv < 20 else "Moderate variation" if cv < 30 else "High variation"
 
     return {
         "brand": brand,
         "period_days": days,
-        "overall": {
-            "total_queries": sum(r.get("total_queries", 0) for r in trends),
-            "mention_rate_mean": round(mean_rate, 2),
-            "standard_deviation": round(std, 2),
-            "coefficient_of_variation": round(std / mean_rate * 100, 2) if mean_rate > 0 else 0,
-            "ci_level": ci_level,
-            "ci_lower": round(ci_lower, 2),
-            "ci_upper": round(ci_upper, 2),
-            "total_runs": n,
-            "sample_size_adq": std < 5 if n > 10 else False,  # Std < 5 & n > 10 = adequate
-        },
-        "by_model": by_model,
+        "n_runs": n,
+        "mean_mention_rate": round(mean_rate, 2),
+        "std_deviation": round(std_dev, 2),
+        "std_error": round(std_error, 2),
+        "confidence_interval_95": ci,
+        "coefficient_of_variation": round(cv, 2),
+        "min_rate": round(min(run_rates), 2),
+        "max_rate": round(max(run_rates), 2),
+        "rate_range": round(max(run_rates) - min(run_rates), 2),
+        "anomalies": anomalies,
+        "interpretation": interpretation,
     }

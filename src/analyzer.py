@@ -18,14 +18,19 @@ class MentionDetector:
     def __init__(self, config: dict):
         self.config = config
         self.brands = self._load_brands(config.get("brands", []))
-        self.detection_method = config.get("tracking", {}).get("detection_method", "both")
+        self.detection_method = config.get("tracking", {}).get(
+            "detection_method", "both"
+        )
 
         # Initialize LLM detector if needed
+        # Check if model key exists to initialize LLM adapter
         if self.detection_method in ("llm", "both"):
             llm_config = config.get("tracking", {}).get("llm_detection", {})
-            if llm_config.get("model") == "ollama":
+            model_name = llm_config.get("model")
+            if model_name:
                 self.llm_adapter = OllamaAdapter(
-                    model=llm_config.get("model", "qwen2.5:7b"), temperature=0.1
+                    model=model_name,
+                    temperature=llm_config.get("temperature", 0.1),
                 )
             else:
                 self.llm_adapter = None
@@ -113,7 +118,9 @@ If no brands are mentioned, return {{}}.
             # Fall back to keyword detection on failure
             return self._keyword_detect(response_text)
 
-    def _llm_confirm(self, response_text: str, keyword_mentions: Dict[str, int]) -> Dict[str, int]:
+    def _llm_confirm(
+        self, response_text: str, keyword_mentions: Dict[str, int]
+    ) -> Dict[str, int]:
         """Use LLM to confirm keyword-drafted mentions."""
         if not self.llm_adapter:
             return keyword_mentions
@@ -207,7 +214,9 @@ class AnalyticsEngine:
             mention_rate = model_stat["mention_rate_pct"]
             total_runs = model_stat["total_runs"]
 
-            ci = self._calculate_confidence_interval(mention_rate, total_runs, confidence_level)
+            ci = self._calculate_confidence_interval(
+                mention_rate, total_runs, confidence_level
+            )
 
             variance_data[model_stat["model_name"]] = {
                 "mention_rate": mention_rate,
@@ -215,7 +224,10 @@ class AnalyticsEngine:
                 "total_mentions": model_stat["total_mentions"],
                 "confidence_interval_95": ci,
                 "standard_error": (
-                    math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs) * 100
+                    math.sqrt(
+                        (mention_rate / 100) * (1 - mention_rate / 100) / total_runs
+                    )
+                    * 100
                     if total_runs > 0
                     else 0
                 ),
@@ -227,7 +239,9 @@ class AnalyticsEngine:
         """Get trend data for a brand."""
         return self.db.get_trends(brand_keyword, days)
 
-    def compare_models(self, brand_keyword: str, days: int = 30) -> List[Dict[str, Any]]:
+    def compare_models(
+        self, brand_keyword: str, days: int = 30
+    ) -> List[Dict[str, Any]]:
         """Compare models for a brand."""
         return self.db.get_model_statistics(brand_keyword, days)
 
@@ -251,7 +265,9 @@ class AnalyticsEngine:
 
         total_mentions = sum(s["total_mentions"] for s in stats)
         total_queries = sum(s["total_runs"] for s in stats)
-        overall_rate = (total_mentions / total_queries * 100) if total_queries > 0 else 0
+        overall_rate = (
+            (total_mentions / total_queries * 100) if total_queries > 0 else 0
+        )
 
         variance_data = {}
         for model_stat in stats:
@@ -270,7 +286,9 @@ class AnalyticsEngine:
             "variance_by_model": variance_data,
         }
 
-    def get_visibility_score(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+    def get_visibility_score(
+        self, brand_keyword: str, days: int = 30
+    ) -> Dict[str, Any]:
         """Calculate overall visibility score for a brand.
 
         Returns:
@@ -301,7 +319,9 @@ class AnalyticsEngine:
         for model_stat in self.db.get_model_statistics(brand_keyword, days):
             model_total = model_stat["total_runs"]
             model_mentions = model_stat["total_mentions"]
-            model_score = (model_mentions / model_total * 100) if model_total > 0 else 0.0
+            model_score = (
+                (model_mentions / model_total * 100) if model_total > 0 else 0.0
+            )
             model_ci = self._calculate_confidence_interval(model_score, model_total)
 
             by_model.append(
@@ -324,7 +344,9 @@ class AnalyticsEngine:
             "confidence_interval": ci,
         }
 
-    def get_competitor_comparison(self, target_brand: str, days: int = 30) -> Dict[str, Any]:
+    def get_competitor_comparison(
+        self, target_brand: str, days: int = 30
+    ) -> Dict[str, Any]:
         """Compare target brand mention rates against competitors.
 
         Args:
@@ -370,7 +392,9 @@ class AnalyticsEngine:
                     competitors_data.append(
                         {
                             "name": competitor["name"],
-                            "keywords": competitor.get("keywords", [competitor["name"]]),
+                            "keywords": competitor.get(
+                                "keywords", [competitor["name"]]
+                            ),
                         }
                     )
                 break
@@ -387,7 +411,9 @@ class AnalyticsEngine:
         target_stats = self.db.get_model_statistics(target_brand, days)
         total_target = sum(s["total_runs"] for s in target_stats)
         total_target_mentions = sum(s["total_mentions"] for s in target_stats)
-        target_score = (total_target_mentions / total_target * 100) if total_target > 0 else 0.0
+        target_score = (
+            (total_target_mentions / total_target * 100) if total_target > 0 else 0.0
+        )
 
         # Get mention rates for all competitors
         competitors_comparison = []
@@ -504,7 +530,9 @@ class AnalyticsEngine:
                             OR mentions_json LIKE ?
                         )
                     """
-                    params.extend([f'{{"{brand_keyword}": 1}}', f'{{"{brand_keyword}": 1,%'])
+                    params.extend(
+                        [f'{{"{brand_keyword}": 1}}', f'{{"{brand_keyword}": 1,%']
+                    )
 
             query += " ORDER BY detected_at DESC"
 
@@ -535,7 +563,9 @@ class AnalyticsEngine:
             prompts = []
             for row in rows:
                 mentions = json.loads(row["mentions_json"] or "{}")
-                is_success = len(mentions) > 1  # Success if more than one brand mentioned
+                is_success = (
+                    len(mentions) > 1
+                )  # Success if more than one brand mentioned
                 prompts.append(
                     {
                         "id": row["id"],
@@ -629,7 +659,9 @@ class AnalyticsEngine:
                                 # Add competitors
                                 for comp in brand.get("competitors", []):
                                     brands[comp["name"]] = {
-                                        "keywords": comp.get("keywords", [comp["name"]]),
+                                        "keywords": comp.get(
+                                            "keywords", [comp["name"]]
+                                        ),
                                         "is_target": False,
                                     }
 
@@ -708,7 +740,9 @@ class AnalyticsEngine:
                 replacement = keyword
 
             # Case-insensitive replacement
-            result = re.sub(rf"\b{escaped_keyword}\b", replacement, result, flags=re.IGNORECASE)
+            result = re.sub(
+                rf"\b{escaped_keyword}\b", replacement, result, flags=re.IGNORECASE
+            )
 
         return result
 
@@ -771,7 +805,176 @@ class AnalyticsEngine:
 
         return run_history
 
-    def get_statistical_summary(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+    def get_run_comparison(self, brand_keyword: str, days: int = 30) -> Dict[str, Any]:
+        """Compare run-to-run trend to detect drift or anomalies."""
+        # Direct implementation for run comparison
+        runs = self.get_run_history(days)
+
+        if not runs:
+            return {
+                "brand": brand_keyword,
+                "runs_analyzed": 0,
+                "message": "No runs to compare",
+            }
+
+        run_trends = []
+        for run in runs:
+            records = self.db.get_by_run(run["run_id"])
+            total = len(records)
+            mentions = sum(
+                1
+                for r in records
+                if brand_keyword in json.loads(r["mentions_json"] or "{}")
+            )
+            rate = (mentions / total * 100) if total > 0 else 0
+
+            run_trends.append(
+                {
+                    "run_id": run["run_id"],
+                    "started_at": run["started_at"],
+                    "completed_at": run["completed_at"],
+                    "total_queries": total,
+                    "brand_mentions": mentions,
+                    "mention_rate": round(rate, 2),
+                }
+            )
+
+        return {
+            "brand": brand_keyword,
+            "runs_analyzed": len(runs),
+            "run_trends": run_trends,
+        }
+
+    def calculate_statistical_summary(
+        self, brand_keyword: str, days: int = 30
+    ) -> Dict[str, Any]:
+        """Calculate comprehensive stats with confidence intervals.
+
+        Args:
+            brand_keyword: Brand to analyze
+            days: Lookback period
+
+        Returns:
+            Comprehensive statistical analysis for dashboard integration.
+        """
+        # Get all models' statistics
+        stats = self.db.get_model_statistics(brand_keyword, days)
+
+        if not stats:
+            return {
+                "brand": brand_keyword,
+                "period_days": days,
+                "n_models": 0,
+                "message": "No data found",
+            }
+
+        # Calculate per-model statistics with CI
+        model_stats = []
+        for model_stat in stats:
+            mention_rate = model_stat["mention_rate_pct"]
+            total_runs = model_stat["total_runs"]
+
+            # Calculate Wilson score CI
+            ci = self._calculate_confidence_interval(mention_rate, total_runs, 95)
+
+            # Calculate standard error
+            std_err = (
+                math.sqrt((mention_rate / 100) * (1 - mention_rate / 100) / total_runs)
+                * 100
+                if total_runs > 0
+                else 0
+            )
+
+            model_stats.append(
+                {
+                    "model_name": model_stat["model_name"],
+                    "mention_rate": mention_rate,
+                    "total_runs": total_runs,
+                    "mentions": model_stat["total_mentions"],
+                    "confidence_interval_lower": round(ci[0] if ci else 0, 2),
+                    "confidence_interval_upper": round(ci[1] if ci else 100, 2),
+                    "standard_error": round(std_err, 2) if std_err else 0,
+                    "statistical_significance": "N/A"
+                    if total_runs < 30
+                    else self._assess_significance(mention_rate, std_err, total_runs),
+                }
+            )
+
+        # Calculate aggregate statistics
+        total_mentions = sum(s["mentions"] for s in model_stats)
+        total_runs = sum(s["total_runs"] for s in model_stats)
+        overall_rate = (total_mentions / total_runs * 100) if total_runs > 0 else 0
+
+        aggregate_ci = self._calculate_confidence_interval(overall_rate, total_runs, 95)
+
+        return {
+            "brand": brand_keyword,
+            "period_days": days,
+            "n_models": len(model_stats),
+            "n_runs": total_runs,
+            "overall_mention_rate": round(overall_rate, 2),
+            "model_stats": model_stats,
+            "aggregate_ci": aggregate_ci,
+            "interpretation": self._interpret_aggregate_stats(overall_rate, total_runs),
+        }
+
+    def _assess_significance(
+        self,
+        mention_rate: float,
+        std_error: float,
+        total_runs: int,
+        min_significant_change: float = 1.645,
+    ) -> str:
+        """Assess if brand visibility is distinguishable at a given level.
+
+        Uses coefficient of variation and number of samples to assess statistical confidence.
+        """
+        if total_runs < 30 or std_error == 0:
+            return "Insufficient data"
+
+        # Assess if the brand visibility rate is well established, not just noise
+        # Uses z-score relative to confidence interval width
+        if mention_rate <= 0:
+            z_equiv = 0
+        else:
+            # Calculate how many standard errors from zero the observation is
+            z_equiv = mention_rate / std_error
+
+        # Use appropriate threshold based on confidence
+        if z_equiv > min_significant_change:
+            return f"Statistically distinguishable (${z_equiv:.1f}\u03c3)"
+        elif z_equiv > 0.5:
+            return f"Possible signal (${z_equiv:.1f}\u03c3)"
+        else:
+            return "Within noise (\u00b10.5\u03c3)"
+
+    def _interpret_aggregate_stats(self, rate: float, total_runs: int) -> str:
+        """Generate user-friendly interpretation of aggregate stats."""
+        interpretations = []
+
+        # Sample size
+        if total_runs < 30:
+            interpretations.append("Limited data - more samples recommended")
+        elif total_runs < 50:
+            interpretations.append("Good sample size - reliable insights")
+        else:
+            interpretations.append("Strong data foundation - statistically robust")
+
+        # Rate interpretation
+        if rate < 30:
+            interpretations.append(
+                "Low brand visibility - consider campaign improvement"
+            )
+        elif rate < 60:
+            interpretations.append("Moderate visibility - steady performance")
+        else:
+            interpretations.append("Strong visibility - brand performing well")
+
+        return "; ".join(interpretations)
+
+    def get_statistical_summary(
+        self, brand_keyword: str, days: int = 30
+    ) -> Dict[str, Any]:
         """Calculate comprehensive statistical summary for a brand.
 
         Includes mean, standard deviation, confidence intervals,
@@ -819,7 +1022,9 @@ class AnalyticsEngine:
         # Calculate statistics
         n = len(run_rates)
         mean_rate = sum(run_rates) / n
-        variance = sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
+        variance = (
+            sum((r - mean_rate) ** 2 for r in run_rates) / (n - 1) if n > 1 else 0
+        )
         std_dev = math.sqrt(variance)
         std_error = std_dev / math.sqrt(n) if n > 0 else 0
 

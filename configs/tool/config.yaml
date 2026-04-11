@@ -35,6 +35,31 @@ tracking:
   
   # Data retention
   max_history_days: 90
+  
+  # Phase 2: Statistical Analysis Configuration
+  statistical_analysis:
+    enabled: true
+    confidence_level: 95  # 90, 95, or 99
+    track_run_history: true
+    min_runs_for_significance: 5
+    anomaly_threshold: 2.0  # Standard deviations to flag as anomaly
+  
+  # Phase 3: Query Fan-Out with Prompt Variations
+  prompt_variations:
+    enabled: false  # Set to true to enable
+    num_variations: 3  # Generate 3 variations per base prompt
+    strategy: "semantic"  # "semantic", "synonym", or "full"
+  
+  # Phase 4: Auto Prompt Generation
+  auto_prompt_generation:
+    enabled: false  # Set to true to enable
+    per_brand_prompts: 15
+    categories:
+      - comparison
+      - recommendation
+      - trends
+      - expertise
+      - purchase_intent
 
 # Mention Detection Settings
 detection:

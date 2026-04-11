@@ -1,21 +1,14 @@
 'use client';
 
-export interface CompetitorData {
-  competitors: Array<{
-    competitor: string;
-    share: number;
-  }>;
-  competitor_names: string[];
-  max_shares: Record<string, number>;
-}
+import type { CompetitorComparison } from '../../lib/api';
 
 export default function CompetitorComparisonChart({ 
   brand, 
-  competitors, 
+  competitorData, 
   period 
 }: { 
   brand: string; 
-  competitors: CompetitorData; 
+  competitorData: CompetitorComparison; 
   period: number 
 }) {
   return (
@@ -26,25 +19,34 @@ export default function CompetitorComparisonChart({
       </div>
 
       <div className="space-y-3">
-        {competitors.competitors.map((item) => (
-          <div key={item.competitor} className="flex items-center gap-3">
+        {(competitorData.all_brands || []).map((br) => (
+          <div key={br.name} className="flex items-center gap-3">
             <div className="flex-1">
-              <p className="font-medium">{item.competitor}</p>
-              <p className="text-xs text-gray-500">Mention share</p>
+              <p className="font-medium">
+                {br.name}
+                {br.is_target && <span className="ml-1 text-xs text-indigo-600">(target)</span>}
+              </p>
+              <p className="text-xs text-gray-700">{br.successful_prompts}/{br.total_prompts} queries</p>
             </div>
             <div className="flex items-center gap-2">
+              <div className="w-32 bg-gray-200 rounded-full h-4">
+                <div
+                  className={`h-4 rounded-full ${br.is_target ? 'bg-indigo-600' : 'bg-gray-500'}`}
+                  style={{ width: `${Math.min(100, br.score)}%` }}
+                />
+              </div>
               <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                item.share > 50 ? 'bg-green-100 text-green-800' : 
-                item.share > 25 ? 'bg-yellow-100 text-yellow-800' : 
+                br.score > 70 ? 'bg-green-100 text-green-800' : 
+                br.score > 40 ? 'bg-yellow-100 text-yellow-800' : 
                 'bg-gray-100 text-gray-800'
               }`}>
-                {(item.share / 100).toFixed(1)}%
+                {br.score?.toFixed(1)}%
               </span>
             </div>
           </div>
         ))}
-        {competitors.competitors.length === 0 && (
-          <p className="text-sm text-gray-500 text-center py-4">No competitor data available</p>
+        {(!competitorData.all_brands || competitorData.all_brands.length === 0) && (
+          <p className="text-sm text-gray-700 text-center py-4">No competitor data available</p>
         )}
       </div>
     </div>

@@ -1,30 +1,17 @@
 'use client';
 
 import { useState } from 'react';
+import type { PromptResult } from '../../lib/api';
 
-interface PromptProps {
-  prompts: Array<{
-    prompt: string;
-    response_text: string;
-    detected_models: Array<{
-      model_name: string;
-      model_provider: string;
-      mentioned: boolean;
-      timestamp: string;
-    }>;
-    mentions_str: string;
-    completed_at: string;
-  }>;
+interface PromptTableProps {
+  prompts: PromptResult[];
 }
 
-export default function PromptTable({ prompts }: PromptProps) {
-  const [expandedModel, setExpandedModel] = useState<{[key: number]: string | null}>({});
+export default function PromptTable({ prompts }: PromptTableProps) {
+  const [expanded, setExpanded] = useState<{[key: number]: boolean}>({});
 
-  const handleToggle = (index: number, model: string) => {
-    setExpandedModel(prev => ({
-      ...prev,
-      [index]: prev[index] === model ? null : model
-    }));
+  const toggleExpand = (index: number) => {
+    setExpanded(prev => ({ ...prev, [index]: !prev[index] }));
   };
 
   return (
@@ -35,43 +22,34 @@ export default function PromptTable({ prompts }: PromptProps) {
         <table className="min-w-full">
           <thead>
             <tr className="border-b">
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Timestamp</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Prompt</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Response</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Models Detected</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mentions</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Status</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Prompt</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Model</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Mentions</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
             </tr>
           </thead>
           <tbody className="divide-y">
             {prompts.map((prompt, index) => (
-              <tr key={index} className="hover:bg-gray-50">
-                <td className="px-4 py-3 text-sm text-gray-600">
-                  {new Date(prompt.completed_at).toLocaleString()}
+              <tr key={prompt.id || index} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(index)}>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                    prompt.is_success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                  }`}>
+                    {prompt.is_success ? 'Success' : 'No mention'}
+                  </span>
                 </td>
                 <td className="px-4 py-3 text-sm font-medium text-gray-900 max-w-xs truncate" title={prompt.prompt}>
                   {prompt.prompt}
                 </td>
-                <td className="px-4 py-3 text-sm text-gray-600 max-w-md truncate" title={prompt.response_text}>
-                  {prompt.response_text}
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {prompt.model_name}
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-600">
-                  {prompt.detected_models.map((model, i) => (
-                    <span
-                      key={i}
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium mr-1 mb-1 cursor-pointer ${
-                        model.mentioned ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'
-                      }`}
-                      onClick={() => handleToggle(index, model.model_name)}
-                    >
-                      {model.model_name}
-                      {expandedModel[index] === model.model_name && (
-                        <span className="ml-1 text-xs">(no mention)</span>
-                      )}
-                    </span>
-                  ))}
+                  {Object.keys(prompt.mentions).join(', ') || 'None'}
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-600">
-                  {prompt.mentions_str}
+                  {new Date(prompt.detected_at).toLocaleDateString()}
                 </td>
               </tr>
             ))}
@@ -79,8 +57,21 @@ export default function PromptTable({ prompts }: PromptProps) {
         </table>
       </div>
       
+      {expanded && Object.entries(expanded).filter(([, v]) => v).map(([idx]) => {
+        const prompt = prompts[Number(idx)];
+        if (!prompt) return null;
+        return (
+          <div key={`detail-${idx}`} className="mt-3 bg-gray-50 p-3 rounded border">
+            <p className="text-sm font-medium text-gray-900 mb-1">Full Prompt:</p>
+            <p className="text-sm text-gray-700 mb-2">{prompt.prompt}</p>
+            <p className="text-sm font-medium text-gray-900 mb-1">Response:</p>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{prompt.response_text}</p>
+          </div>
+        );
+      })}
+
       {prompts.length === 0 && (
-        <p className="text-center text-gray-500 py-4">No prompts available</p>
+        <p className="text-center text-gray-700 py-4">No prompts available</p>
       )}
     </div>
   );

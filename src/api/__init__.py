@@ -1,16 +1,23 @@
 """Main API application."""
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.prompts import router as prompts_router
 
 app = FastAPI(
     title="AI Visibility Tracker API",
     description="API endpoints for brand visibility analytics",
-    version="1.0.0",
+    version="0.3.0",
 )
 
-# Include routers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3002"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 app.include_router(prompts_router)
 
 
@@ -20,20 +27,5 @@ async def root():
     return {
         "service": "AI Visibility Tracker API",
         "status": "healthy",
-        "version": "1.0.0",
-        "endpoints": [
-            "/api/data",
-            "/api/visibility-score",
-            "/api/competitors",
-            "/api/run-history",
-            "/api/prompts",
-            "/api/prompts/{prompt_id}",
-            "/api/statistical-summary",
-        ],
+        "version": "0.3.0",
     }
-
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
