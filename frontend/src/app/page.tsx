@@ -67,6 +67,8 @@ export default function Home() {
     return acc;
   }, []) || [];
 
+  const chartModelKeys = Array.from(new Set(chartData.flatMap((d: any) => Object.keys(d)).filter((k: string) => k !== 'date'))) as string[];
+
   const radarData = visibilityScore?.by_model?.map(m => ({
     model: m.model_name,
     score: m.score,
@@ -240,7 +242,7 @@ export default function Home() {
                       <YAxis />
                       <Tooltip />
                       <Legend />
-                      {Object.keys(chartData[0] || {}).filter((k: string) => k !== 'date').map((model: string, i: number) => (
+                      {chartModelKeys.map((model: string, i: number) => (
                         <Line key={model} type="monotone" dataKey={model} stroke={`hsl(${i * 60}, 70%, 50%)`} />
                       ))}
                     </LineChart>

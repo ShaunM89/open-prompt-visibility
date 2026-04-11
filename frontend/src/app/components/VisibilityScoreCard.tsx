@@ -66,16 +66,19 @@ export default function VisibilityScoreCard({ brand, scoreData, trends }: Visibi
         <div className="h-32">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={trends}>
-              {Object.keys(trends[0] || {}).filter((k: string) => k !== 'date').map((key: string, i: number) => (
-                <Line
-                  key={key}
-                  type="monotone"
-                  dataKey={key}
-                  stroke={`hsl(${i * 60}, 70%, 50%)`}
-                  strokeWidth={2}
-                  dot={false}
-                />
-              ))}
+              {(() => {
+                const keys = [...new Set(trends.flatMap((d: any) => Object.keys(d)).filter((k: string) => k !== 'date'))];
+                return keys.map((key: string, i: number) => (
+                  <Line
+                    key={key}
+                    type="monotone"
+                    dataKey={key}
+                    stroke={`hsl(${i * 60}, 70%, 50%)`}
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                ));
+              })()}
               <Tooltip contentStyle={{ borderRadius: '8px' }} />
               <Legend />
             </LineChart>
