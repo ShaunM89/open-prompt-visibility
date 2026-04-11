@@ -1,9 +1,12 @@
 """LLM Model Adapters for unified querying interface."""
 
+import logging
 import os
 from abc import ABC, abstractmethod
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class ModelAdapter(ABC):
@@ -40,7 +43,9 @@ class OllamaAdapter(ModelAdapter):
 
     def __init__(self, model: str, temperature: float = 0.7, **kwargs):
         super().__init__(model, temperature, **kwargs)
-        self.endpoint = kwargs.get('endpoint', os.getenv('OLLAMA_HOST', 'http://localhost:11434'))
+        self.endpoint = kwargs.get(
+            "endpoint", os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        )
         self.api_url = f"{self.endpoint}/api/generate"
 
     @property
@@ -58,13 +63,13 @@ class OllamaAdapter(ModelAdapter):
                     "stream": False,
                     "options": {
                         "temperature": self.temperature,
-                    }
+                    },
                 },
-                timeout=120
+                timeout=120,
             )
             response.raise_for_status()
             result = response.json()
-            return result.get('response', '')
+            return result.get("response", "")
         except requests.exceptions.ConnectionError:
             raise ConnectionError(
                 f"Cannot connect to Ollama at {self.endpoint}. "
@@ -79,24 +84,26 @@ class OllamaAdapter(ModelAdapter):
         """Check if Ollama is running and model is available."""
         try:
             # Check if server is up
-            tags_response = requests.get(
-                f"{self.endpoint}/api/tags",
-                timeout=5
-            )
+            tags_response = requests.get(f"{self.endpoint}/api/tags", timeout=5)
             tags_response.raise_for_status()
-            available_models = [m['name'] for m in tags_response.json().get('models', [])]
+            available_models = [
+                m["name"] for m in tags_response.json().get("models", [])
+            ]
 
             # Check if our model is available
             if self.model not in available_models:
-                print(f"Warning: Model '{self.model}' not found in Ollama. Available: {available_models}")
+                logger.warning(
+                    "Model '%s' not found in Ollama. Available: %s",
+                    self.model, available_models,
+                )
                 return False
 
             return True
         except requests.exceptions.ConnectionError:
-            print(f"Cannot connect to Ollama at {self.endpoint}")
+            logger.warning("Cannot connect to Ollama at %s", self.endpoint)
             return False
         except Exception as e:
-            print(f"Ollama health check failed: {e}")
+            logger.warning("Ollama health check failed: %s", e)
             return False
 
 
@@ -107,12 +114,10 @@ class OpenAIAdapter(ModelAdapter):
         super().__init__(model, temperature, **kwargs)
         self.api_key = self._get_api_key(kwargs)
         self.api_url = "https://api.openai.com/v1/chat/completions"
-        # Convert model name from config format: gpt-4o -> gpt-4o
-        self.model = model.replace("gpt-4o", "gpt-4o").replace("gpt-4", "gpt-4")
 
     def _get_api_key(self, kwargs: dict) -> str:
         """Get API key from env var specified in config."""
-        env_var = kwargs.get('api_key_env', 'OPENAI_API_KEY')
+        env_var = kwargs.get("api_key_env", "OPENAI_API_KEY")
         api_key = os.getenv(env_var)
         if not api_key:
             raise ValueError(f"API key not found. Set {env_var} environment variable.")
@@ -127,7 +132,7 @@ class OpenAIAdapter(ModelAdapter):
         try:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             }
             response = requests.post(
                 self.api_url,
@@ -136,19 +141,21 @@ class OpenAIAdapter(ModelAdapter):
                     "model": self.model,
                     "messages": [
                         {"role": "system", "content": "You are a helpful assistant."},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
                     "temperature": self.temperature,
-                    "max_tokens": 2000
+                    "max_tokens": 2000,
                 },
-                timeout=60
+                timeout=60,
             )
             response.raise_for_status()
             result = response.json()
-            return result['choices'][0]['message']['content']
+            return result["choices"][0]["message"]["content"]
         except requests.exceptions.HTTPError as e:
-            error_body = e.response.text if e.response else 'No response body'
-            raise RuntimeError(f"OpenAI API error ({e.response.status_code}): {error_body}")
+            error_body = e.response.text if e.response else "No response body"
+            raise RuntimeError(
+                f"OpenAI API error ({e.response.status_code}): {error_body}"
+            )
         except Exception as e:
             raise RuntimeError(f"OpenAI query failed: {e}")
 
@@ -158,11 +165,11 @@ class OpenAIAdapter(ModelAdapter):
             response = requests.get(
                 "https://api.openai.com/v1/models",
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=10
+                timeout=10,
             )
             return response.status_code == 200
         except Exception as e:
-            print(f"OpenAI health check failed: {e}")
+            logger.warning("OpenAI health check failed: %s", e)
             return False
 
 
@@ -177,7 +184,7 @@ class AnthropicAdapter(ModelAdapter):
 
     def _get_api_key(self, kwargs: dict) -> str:
         """Get API key from env var."""
-        env_var = kwargs.get('api_key_env', 'ANTHROPIC_API_KEY')
+        env_var = kwargs.get("api_key_env", "ANTHROPIC_API_KEY")
         api_key = os.getenv(env_var)
         if not api_key:
             raise ValueError(f"API key not found. Set {env_var} environment variable.")
@@ -193,7 +200,7 @@ class AnthropicAdapter(ModelAdapter):
             headers = {
                 "x-api-key": self.api_key,
                 "content-type": "application/json",
-                "anthropic-version": "2023-06-01"
+                "anthropic-version": "2023-06-01",
             }
             response = requests.post(
                 self.api_url,
@@ -203,16 +210,18 @@ class AnthropicAdapter(ModelAdapter):
                     "messages": [{"role": "user", "content": prompt}],
                     "system": "You are a helpful assistant.",
                     "temperature": self.temperature,
-                    "max_tokens": 2000
+                    "max_tokens": 2000,
                 },
-                timeout=60
+                timeout=60,
             )
             response.raise_for_status()
             result = response.json()
-            return result['content'][0]['text']
+            return result["content"][0]["text"]
         except requests.exceptions.HTTPError as e:
-            error_body = e.response.text if e.response else 'No response body'
-            raise RuntimeError(f"Anthropic API error ({e.response.status_code}): {error_body}")
+            error_body = e.response.text if e.response else "No response body"
+            raise RuntimeError(
+                f"Anthropic API error ({e.response.status_code}): {error_body}"
+            )
         except Exception as e:
             raise RuntimeError(f"Anthropic query failed: {e}")
 
@@ -222,7 +231,7 @@ class AnthropicAdapter(ModelAdapter):
             headers = {
                 "x-api-key": self.api_key,
                 "content-type": "application/json",
-                "anthropic-version": "2023-06-01"
+                "anthropic-version": "2023-06-01",
             }
             # Try a minimal request
             response = requests.post(
@@ -231,13 +240,16 @@ class AnthropicAdapter(ModelAdapter):
                 json={
                     "model": "claude-3-sonnet-20240229",
                     "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1
+                    "max_tokens": 1,
                 },
-                timeout=10
+                timeout=10,
             )
-            return response.status_code in (200, 400)  # 400 means auth OK, invalid params
+            return response.status_code in (
+                200,
+                400,
+            )  # 400 means auth OK, invalid params
         except Exception as e:
-            print(f"Anthropic health check failed: {e}")
+            logger.warning("Anthropic health check failed: %s", e)
             return False
 
 
@@ -251,7 +263,7 @@ class HuggingFaceAdapter(ModelAdapter):
 
     def _get_api_key(self, kwargs: dict) -> str:
         """Get API key from env var."""
-        env_var = kwargs.get('api_key_env', 'HUGGINGFACE_API_KEY')
+        env_var = kwargs.get("api_key_env", "HUGGINGFACE_API_KEY")
         api_key = os.getenv(env_var)
         if not api_key:
             raise ValueError(f"API key not found. Set {env_var} environment variable.")
@@ -272,16 +284,16 @@ class HuggingFaceAdapter(ModelAdapter):
                     "inputs": prompt,
                     "parameters": {
                         "temperature": self.temperature,
-                        "max_new_tokens": 1000
-                    }
+                        "max_new_tokens": 1000,
+                    },
                 },
-                timeout=120
+                timeout=120,
             )
             response.raise_for_status()
             result = response.json()
             # HF returns different formats depending on model
             if isinstance(result, list) and len(result) > 0:
-                return result[0].get('generated_text', '')
+                return result[0].get("generated_text", "")
             return str(result)
         except Exception as e:
             raise RuntimeError(f"HuggingFace query failed: {e}")
@@ -293,26 +305,32 @@ class HuggingFaceAdapter(ModelAdapter):
             response = requests.head(self.api_url, headers=headers, timeout=10)
             return response.status_code < 500
         except Exception as e:
-            print(f"HuggingFace health check failed: {e}")
+            logger.warning("HuggingFace health check failed: %s", e)
             return False
 
 
 def create_adapter(config: dict) -> ModelAdapter:
     """Factory function to create adapter from config."""
-    provider = config['provider'].lower()
+    provider = config["provider"].lower()
 
     adapters = {
-        'ollama': OllamaAdapter,
-        'openai': OpenAIAdapter,
-        'anthropic': AnthropicAdapter,
-        'huggingface': HuggingFaceAdapter,
+        "ollama": OllamaAdapter,
+        "openai": OpenAIAdapter,
+        "anthropic": AnthropicAdapter,
+        "huggingface": HuggingFaceAdapter,
     }
 
     if provider not in adapters:
-        raise ValueError(f"Unknown provider: {provider}. Available: {list(adapters.keys())}")
+        raise ValueError(
+            f"Unknown provider: {provider}. Available: {list(adapters.keys())}"
+        )
 
     return adapters[provider](
-        model=config['model'],
-        temperature=config.get('temperature', 0.7),
-        **{k: v for k, v in config.items() if k not in ['provider', 'model', 'temperature', 'enabled']}
+        model=config["model"],
+        temperature=config.get("temperature", 0.7),
+        **{
+            k: v
+            for k, v in config.items()
+            if k not in ["provider", "model", "temperature", "enabled"]
+        },
     )

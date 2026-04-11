@@ -32,7 +32,7 @@ def cli():
     Examples:
         pvt run                     # Run tracking batch
         pvt export --format csv     # Export results
-        pvt dashboard               # Launch dashboard
+        pvt serve                   # Start API server for dashboard
     """
     pass
 
@@ -45,8 +45,16 @@ def cli():
     help="Path to configuration file (default: configs/default.yaml)",
 )
 @click.option("--verbose", "-v", is_flag=True, help="Show detailed output during run")
-@click.option("--health-check", is_flag=True, help="Only run health checks, do not execute queries")
-@click.option("--enable-variations", is_flag=True, help="Enable prompt variations for base prompts")
+@click.option(
+    "--health-check",
+    is_flag=True,
+    help="Only run health checks, do not execute queries",
+)
+@click.option(
+    "--enable-variations",
+    is_flag=True,
+    help="Enable prompt variations for base prompts",
+)
 @click.option(
     "--num-variations",
     type=int,
@@ -60,7 +68,9 @@ def cli():
     help="Strategy for generating variations (default: semantic)",
 )
 @click.option(
-    "--enable-auto-gen", is_flag=True, help="Enable auto-generation of brand-specific prompts"
+    "--enable-auto-gen",
+    is_flag=True,
+    help="Enable auto-generation of brand-specific prompts",
 )
 @click.option(
     "--auto-gen-per-brand",
@@ -82,6 +92,24 @@ def run_cli(
     try:
         console.print(f"[blue]Loading configuration from {config}...[/blue]")
         tracker = VisibilityTracker(config)
+        # Override config with CLI flags
+        if enable_variations:
+            tracker.config.setdefault("tracking", {}).setdefault(
+                "prompt_variations", {}
+            )["enabled"] = True
+            tracker.config["tracking"]["prompt_variations"]["num_variations"] = (
+                num_variations
+            )
+            tracker.config["tracking"]["prompt_variations"]["strategy"] = (
+                variation_strategy
+            )
+        if enable_auto_gen:
+            tracker.config.setdefault("tracking", {}).setdefault(
+                "auto_prompt_generation", {}
+            )["enabled"] = True
+            tracker.config["tracking"]["auto_prompt_generation"][
+                "per_brand_prompts"
+            ] = auto_gen_per_brand
 
         if health_check:
             console.print("\n[bold]Running health check...[/bold]")
@@ -90,14 +118,18 @@ def run_cli(
                 console.print("\n[green]All models available![/green]")
             else:
                 failed = [k for k, v in health.items() if not v]
-                console.print(f"\n[red]{len(failed)} model(s) unavailable:[/red] {failed}")
+                console.print(
+                    f"\n[red]{len(failed)} model(s) unavailable:[/red] {failed}"
+                )
             return
 
         console.print("\n[bold blue]Starting tracking run...[/bold blue]")
         result = tracker.run_batch(verbose=verbose)
 
         if result.failed_queries > 0:
-            console.print(f"\n[yellow]Warning: {result.failed_queries} queries failed[/yellow]")
+            console.print(
+                f"\n[yellow]Warning: {result.failed_queries} queries failed[/yellow]"
+            )
 
         sys.exit(0 if result.failed_queries == 0 else 1)
 
@@ -125,15 +157,21 @@ def run_cli(
     help="Export format (default: csv)",
 )
 @click.option("--output", "-o", required=True, help="Output file path")
-@click.option("--run-id", type=int, help="Export only a specific run (default: all history)")
-@click.option("--days", "-d", default=90, help="Number of days of history to export (default: 90)")
+@click.option(
+    "--run-id", type=int, help="Export only a specific run (default: all history)"
+)
+@click.option(
+    "--days", "-d", default=90, help="Number of days of history to export (default: 90)"
+)
 def export_cli(format: str, output: str, run_id: int, days: int):
     """Export tracking data to CSV or JSON."""
     try:
         tracker = VisibilityTracker()
 
         if run_id:
-            output_path = tracker.export_results(run_id=run_id, format=format, output_path=output)
+            output_path = tracker.export_results(
+                run_id=run_id, format=format, output_path=output
+            )
         else:
             output_path = tracker.export_results(format=format, output_path=output)
 
@@ -145,7 +183,9 @@ def export_cli(format: str, output: str, run_id: int, days: int):
 
 
 @cli.command("config")
-@click.option("--config", "-c", default="configs/default.yaml", help="Path to configuration file")
+@click.option(
+    "--config", "-c", default="configs/default.yaml", help="Path to configuration file"
+)
 @click.option("--json", "-j", "as_json", is_flag=True, help="Output as JSON")
 def config_cli(config: str, as_json: bool):
     """Display the active configuration."""
@@ -158,22 +198,30 @@ def config_cli(config: str, as_json: bool):
             console.print(json.dumps(tracker.config, indent=2, default=str))
         else:
             console.print(f"[bold]Configuration: {config}[/bold]\n")
-            console.print(f"[bold]Brands:[/bold] {len(tracker.config.get('brands', []))}")
+            console.print(
+                f"[bold]Brands:[/bold] {len(tracker.config.get('brands', []))}"
+            )
 
             prompts = tracker.config.get("prompts", {})
             console.print(f"[bold]Prompt categories:[/bold] {len(prompts)}")
             for cat, pmts in prompts.items():
                 console.print(f"  - {cat}: {len(pmts)} prompts")
 
-            models = [m for m in tracker.config.get("models", []) if m.get("enabled", True)]
+            models = [
+                m for m in tracker.config.get("models", []) if m.get("enabled", True)
+            ]
             console.print(f"[bold]Enabled models:[/bold] {len(models)}")
             for m in models:
                 console.print(f"  - {m['provider']}/{m['model']}")
 
             tracking = tracker.config.get("tracking", {})
             console.print(f"[bold]Tracking settings:[/bold]")
-            console.print(f"  queries_per_prompt: {tracking.get('queries_per_prompt', 10)}")
-            console.print(f"  detection_method: {tracking.get('detection_method', 'both')}")
+            console.print(
+                f"  queries_per_prompt: {tracking.get('queries_per_prompt', 10)}"
+            )
+            console.print(
+                f"  detection_method: {tracking.get('detection_method', 'both')}"
+            )
 
     except Exception as e:
         console.print(f"[red]Failed to load config: {e}[/red]")
@@ -181,7 +229,9 @@ def config_cli(config: str, as_json: bool):
 
 
 @cli.command("stats")
-@click.option("--days", "-d", default=90, help="Days of history to analyze (default: 90)")
+@click.option(
+    "--days", "-d", default=90, help="Days of history to analyze (default: 90)"
+)
 def stats_cli(days: int):
     """Show database statistics."""
     try:
@@ -206,7 +256,9 @@ def stats_cli(days: int):
 
 @cli.command("trends")
 @click.argument("brand", required=True)
-@click.option("--days", "-d", default=30, help="Days of history to analyze (default: 30)")
+@click.option(
+    "--days", "-d", default=30, help="Days of history to analyze (default: 30)"
+)
 @click.option("--ci", default=95, type=int, help="Confidence level (90, 95, or 99)")
 def trends_cli(brand: str, days: int, ci: int):
     """Show mention trends for a specific brand."""
@@ -245,51 +297,34 @@ def trends_cli(brand: str, days: int, ci: int):
         sys.exit(1)
 
 
-@cli.command("dashboard")
-@click.option("--host", default="localhost", help="Dashboard host (default: localhost)")
-@click.option("--port", "-p", type=int, default=8501, help="Dashboard port (default: 8501)")
-def dashboard_cli(host: str, port: int):
-    """Launch the visualization dashboard.
+@cli.command("serve")
+@click.option("--host", default="127.0.0.1", help="API server host (default: 127.0.0.1)")
+@click.option(
+    "--port", "-p", type=int, default=8000, help="API server port (default: 8000)"
+)
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development")
+def serve_cli(host: str, port: int, reload: bool):
+    """Start the API server for the Next.js dashboard.
 
-    Note: This requires the dashboard extra:
-        pip install prompt-visibility-tracker[dashboard]
-
-    Or installs Streamlit for a simpler dashboard.
+    Run this before starting the frontend:
+        pvt serve
+        cd frontend && npm run dev
     """
     try:
-        import streamlit
-        import subprocess
-        import sys
+        import uvicorn
 
-        # Find the dashboard.py file
-        dashboard_path = Path(__file__).parent / "src" / "dashboard.py"
-
-        if not dashboard_path.exists():
-            console.print("[yellow]Streamlit dashboard not implemented yet.[/yellow]")
-            console.print("[cyan]View trends with: pvt trends <brand> --days 30[/cyan]")
-            return
-
-        console.print(f"[blue]Launching dashboard at http://{host}:{port}...[/blue]")
-        subprocess.check_call(
-            [
-                sys.executable,
-                "-m",
-                "streamlit",
-                "run",
-                str(dashboard_path),
-                "--server.address",
-                host,
-                "--server.port",
-                str(port),
-            ]
-        )
+        console.print(f"[blue]Starting API server at http://{host}:{port}...[/blue]")
+        console.print(f"[cyan]API docs available at http://{host}:{port}/docs[/cyan]")
+        uvicorn.run("src.api:app", host=host, port=port, reload=reload)
 
     except ImportError:
-        console.print("[red]Streamlit not installed.[/red]")
-        console.print("[cyan]Install with: pip install prompt-visibility-tracker[dashboard][/cyan]")
+        console.print("[red]uvicorn not installed.[/red]")
+        console.print(
+            "[cyan]Install with: pip install uvicorn[/cyan]"
+        )
         sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Failed to launch dashboard: {e}[/red]")
+        console.print(f"[red]Failed to start API server: {e}[/red]")
         sys.exit(1)
 
 

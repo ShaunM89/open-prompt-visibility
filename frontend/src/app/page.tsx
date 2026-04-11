@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, ErrorBar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
 import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry } from '../lib/api';
 
-type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats';
+type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats' | 'settings';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -12,23 +12,18 @@ export default function Home() {
   const [brand, setBrand] = useState('Nike');
   const [days, setDays] = useState(30);
   
-  // Overview data
   const [overview, setOverview] = useState<any>(null);
   const [visibilityScore, setVisibilityScore] = useState<VisibilityScoreData | null>(null);
   
-  // Competitor data
   const [competitorData, setCompetitorData] = useState<CompetitorComparison | null>(null);
   
-  // Prompt list data
   const [promptList, setPromptList] = useState<PromptListData | null>(null);
   const [promptPage, setPromptPage] = useState(1);
   const [selectedPrompt, setSelectedPrompt] = useState<any>(null);
   const [successFilter, setSuccessFilter] = useState<boolean | null>(null);
   
-  // Run history
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
   
-  // Statistical summary
   const [statSummary, setStatSummary] = useState<StatisticalSummary | null>(null);
 
   useEffect(() => {
@@ -74,7 +69,15 @@ export default function Home() {
 
   const radarData = visibilityScore?.by_model?.map(m => ({
     model: m.model_name,
-    score: m.score
+    score: m.score,
+    ci_lower: m.confidence_interval ? m.score - m.confidence_interval[0] : 0,
+    ci_upper: m.confidence_interval ? m.confidence_interval[1] - m.score : 0,
+  })) || [];
+
+  const competitorBarData = competitorData?.all_brands?.map(br => ({
+    name: br.name,
+    score: br.score,
+    is_target: br.is_target,
   })) || [];
 
   const getSuccessBadge = (isSuccess: boolean) => (
@@ -163,7 +166,8 @@ export default function Home() {
               { id: 'competitors', label: 'Competitors' },
               { id: 'prompts', label: 'Prompt Details' },
               { id: 'history', label: 'Run History' },
-              { id: 'stats', label: 'Statistics' }
+              { id: 'stats', label: 'Statistics' },
+              { id: 'settings', label: 'Settings' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -264,7 +268,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Model Comparison Table */}
+            {/* Model Comparison Table with CI */}
             <div className="bg-white shadow rounded-lg p-6">
               <h2 className="text-lg font-medium text-gray-900 mb-4">Model Comparison</h2>
               {overview.modelStats.length > 0 ? (
@@ -312,6 +316,21 @@ export default function Home() {
               Competitor Comparison ({brand} vs competitors)
             </h2>
             
+            {/* Bar chart with competitor comparison */}
+            {competitorBarData.length > 0 && (
+              <div className="mb-6">
+                <ResponsiveContainer width="100%" height={300}>
+                  <BarChart data={competitorBarData} layout="vertical">
+                    <XAxis type="number" domain={[0, 100]} />
+                    <YAxis type="category" dataKey="name" width={120} />
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <Tooltip formatter={(value) => `${value}%`} />
+                    <Bar dataKey="score" fill="#6366f1" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
             <div className="mb-6">
               <p className="text-sm text-gray-900 mb-2">
                 All brands sorted by mention rate ({days} days)
@@ -490,6 +509,26 @@ export default function Home() {
           <div className="bg-white shadow rounded-lg p-6">
             <h2 className="text-lg font-medium text-gray-900 mb-4">Run History ({runHistory.length} runs)</h2>
             
+            {/* Run rate trend chart */}
+            {runHistory.length > 1 && (
+              <div className="mb-6">
+                <h3 className="text-md font-medium text-gray-900 mb-3">Success Rate Over Runs</h3>
+                <ResponsiveContainer width="100%" height={250}>
+                  <LineChart data={runHistory.map(r => ({
+                    name: `#${r.run_id}`,
+                    rate: r.success_rate,
+                    queries: r.total_queries,
+                  }))}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Line type="monotone" dataKey="rate" stroke="#6366f1" strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -586,7 +625,15 @@ export default function Home() {
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-900">Coefficient of Variation:</dt>
-                    <dd className="font-medium">{statSummary.coefficient_of_variation.toFixed(1)}%</dd>
+                    <dd className="font-medium">
+                      <span className={
+                        statSummary.coefficient_of_variation < 20 ? 'text-green-600' :
+                        statSummary.coefficient_of_variation < 30 ? 'text-yellow-600' :
+                        'text-red-600'
+                      }>
+                        {statSummary.coefficient_of_variation.toFixed(1)}%
+                      </span>
+                    </dd>
                   </div>
                   <div className="flex justify-between">
                     <dt className="text-gray-900">Min Rate:</dt>
@@ -604,26 +651,214 @@ export default function Home() {
               </div>
             </div>
 
+            {/* CI Visualization */}
+            {statSummary.confidence_interval_95 && (
+              <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
+                <h3 className="font-medium text-gray-900 mb-3">95% Confidence Interval Visualization</h3>
+                <div className="relative h-12 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="absolute h-full bg-indigo-200 rounded-full"
+                    style={{
+                      left: `${Math.max(0, statSummary.confidence_interval_95[0])}%`,
+                      width: `${Math.min(100, statSummary.confidence_interval_95[1]) - Math.max(0, statSummary.confidence_interval_95[0])}%`,
+                    }}
+                  />
+                  <div
+                    className="absolute h-full w-1 bg-indigo-600"
+                    style={{ left: `${statSummary.mean_mention_rate}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>0%</span>
+                  <span className="text-indigo-600 font-medium">
+                    Mean: {statSummary.mean_mention_rate}% (CI: {statSummary.confidence_interval_95[0].toFixed(1)}% - {statSummary.confidence_interval_95[1].toFixed(1)}%)
+                  </span>
+                  <span>100%</span>
+                </div>
+              </div>
+            )}
+
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
               <h3 className="font-medium text-blue-900 mb-2">Interpretation</h3>
               <p className="text-sm text-blue-800">{statSummary.interpretation}</p>
             </div>
 
+            {/* Drift / Anomaly indicators */}
             {statSummary.anomalies.length > 0 && (
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <h3 className="font-medium text-yellow-900 mb-3">Anomalies Detected ({statSummary.anomalies.length})</h3>
+                <h3 className="font-medium text-yellow-900 mb-3">
+                  <span className="inline-flex items-center">
+                    <svg className="w-5 h-5 mr-2 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                    </svg>
+                    Drift Detected ({statSummary.anomalies.length} anomalous run{statSummary.anomalies.length > 1 ? 's' : ''})
+                  </span>
+                </h3>
                 <p className="text-sm text-yellow-800 mb-2">
-                  These runs show mention rates {'>'}2 standard deviations from the mean:
+                  These runs show mention rates &gt;2 standard deviations from the mean — possible data drift or model behavior changes:
                 </p>
-                <ul className="text-sm text-yellow-800 space-y-1">
+                <ul className="text-sm text-yellow-800 space-y-2">
                   {statSummary.anomalies.map((anom) => (
-                    <li key={anom.run_id}>
-                      Run #{anom.run_id}: {anom.rate}% (deviation: {anom.deviation.toFixed(2)}σ)
+                    <li key={anom.run_id} className="flex items-center gap-2">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        anom.deviation > 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                      }`}>
+                        {anom.deviation > 0 ? 'Above' : 'Below'} mean
+                      </span>
+                      <span>
+                        Run #{anom.run_id}: <strong>{anom.rate}%</strong> (deviation: {anom.deviation.toFixed(2)}σ)
+                      </span>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
+
+            {statSummary.anomalies.length === 0 && statSummary.n_runs > 0 && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                <h3 className="font-medium text-green-900 mb-2 flex items-center">
+                  <svg className="w-5 h-5 mr-2 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  No Drift Detected
+                </h3>
+                <p className="text-sm text-green-800">
+                  All runs are within 2 standard deviations of the mean. Brand visibility is stable.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!loading && activeTab === 'settings' && (
+          <div className="bg-white shadow rounded-lg p-6">
+            <h2 className="text-lg font-medium text-gray-900 mb-6">Settings</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* Prompt Variations */}
+              <div className="border border-gray-200 rounded-lg p-5">
+                <h3 className="font-medium text-gray-900 mb-4">Prompt Variations</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Generate semantically similar variations of base prompts to capture topic diversity
+                  and average out wording bias.
+                </p>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-900">Status</span>
+                    <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">Config-driven</span>
+                  </div>
+                  <div className="text-sm text-gray-700">
+                    <p>Configure in <code className="bg-gray-100 px-1 rounded text-xs">configs/tool/config.yaml</code>:</p>
+                    <pre className="bg-gray-50 p-3 rounded mt-2 text-xs overflow-x-auto">{`tracking:
+  prompt_variations:
+    enabled: true
+    num_variations: 3
+    strategy: "semantic"`}</pre>
+                  </div>
+                  <div className="text-sm text-gray-700">
+                    <p>Or use CLI flags:</p>
+                    <pre className="bg-gray-50 p-3 rounded mt-2 text-xs overflow-x-auto">{`python main.py run \\
+  --enable-variations \\
+  --num-variations 3 \\
+  --variation-strategy semantic`}</pre>
+                  </div>
+                </div>
+              </div>
+
+              {/* Auto-Generated Prompts */}
+              <div className="border border-gray-200 rounded-lg p-5">
+                <h3 className="font-medium text-gray-900 mb-4">Auto-Generated Prompts</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Automatically generate relevant prompts based on brand domain and subtopics
+                  to increase data depth.
+                </p>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-900">Status</span>
+                    <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">Config-driven</span>
+                  </div>
+                  <div className="text-sm text-gray-700">
+                    <p>Configure in <code className="bg-gray-100 px-1 rounded text-xs">configs/tool/config.yaml</code>:</p>
+                    <pre className="bg-gray-50 p-3 rounded mt-2 text-xs overflow-x-auto">{`tracking:
+  auto_prompt_generation:
+    enabled: true
+    per_brand_prompts: 15
+    categories:
+      - comparison
+      - recommendation
+      - trends`}</pre>
+                  </div>
+                  <div className="text-sm text-gray-700">
+                    <p>Or use CLI flags:</p>
+                    <pre className="bg-gray-50 p-3 rounded mt-2 text-xs overflow-x-auto">{`python main.py run \\
+  --enable-auto-gen \\
+  --auto-gen-per-brand 5`}</pre>
+                  </div>
+                </div>
+              </div>
+
+              {/* Statistical Analysis */}
+              <div className="border border-gray-200 rounded-lg p-5">
+                <h3 className="font-medium text-gray-900 mb-4">Statistical Analysis</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Configure confidence levels, anomaly detection thresholds, and run history tracking.
+                </p>
+                <div className="text-sm text-gray-700">
+                  <pre className="bg-gray-50 p-3 rounded text-xs overflow-x-auto">{`tracking:
+  statistical_analysis:
+    enabled: true
+    confidence_level: 95
+    track_run_history: true
+    min_runs_for_significance: 5
+    anomaly_threshold: 2.0`}</pre>
+                </div>
+              </div>
+
+              {/* Brand Domain */}
+              <div className="border border-gray-200 rounded-lg p-5">
+                <h3 className="font-medium text-gray-900 mb-4">Brand Domain Configuration</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  Add domain metadata to brands for auto-generation and subtopic coverage.
+                </p>
+                <div className="text-sm text-gray-700">
+                  <pre className="bg-gray-50 p-3 rounded text-xs overflow-x-auto">{`# configs/users/brands.yaml
+brands:
+  - name: "Nike"
+    keywords: ["Nike", "Swoosh"]
+    domain: "athletic footwear & apparel"
+    subtopics:
+      - running
+      - basketball
+      - sustainability
+    target_audience:
+      - athletes
+      - fitness enthusiasts`}</pre>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick reference */}
+            <div className="mt-8 border-t pt-6">
+              <h3 className="font-medium text-gray-900 mb-3">Quick Reference</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="font-medium text-gray-900 mb-1">Start API server</p>
+                  <code className="text-xs">python main.py serve</code>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="font-medium text-gray-900 mb-1">Run tracking batch</p>
+                  <code className="text-xs">python main.py run</code>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="font-medium text-gray-900 mb-1">Export data</p>
+                  <code className="text-xs">python main.py export --format csv</code>
+                </div>
+                <div className="bg-gray-50 p-3 rounded">
+                  <p className="font-medium text-gray-900 mb-1">View stats</p>
+                  <code className="text-xs">python main.py stats</code>
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>

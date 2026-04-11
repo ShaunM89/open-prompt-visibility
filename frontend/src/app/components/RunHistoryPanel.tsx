@@ -1,42 +1,60 @@
-export default function RunHistoryPanel({ runs }: { runs: any[] }) {
+import type { RunHistoryEntry } from '../../lib/api';
+
+export default function RunHistoryPanel({ runs }: { runs: RunHistoryEntry[] }) {
   if (!runs || runs.length === 0) {
     return null;
   }
 
-  const statusClass = (status: string) => {
-    switch (status?.toLowerCase()) {
-      case 'success': return 'bg-green-100 text-green-900 border-green-200';
-      case 'failed': return 'bg-red-100 text-red-900 border-red-200';
-      case 'running': return 'bg-yellow-100 text-yellow-900 border-yellow-200';
-      default: return 'bg-gray-100 text-gray-800 border-gray-200';
-    }
+  const rateClass = (rate: number) => {
+    if (rate >= 70) return 'bg-green-100 text-green-800';
+    if (rate >= 40) return 'bg-yellow-100 text-yellow-800';
+    return 'bg-red-100 text-red-800';
   };
 
   return (
     <div className="rounded-lg border bg-white p-4 shadow-sm">
       <h2 className="text-lg font-semibold text-gray-900 mb-4">Run History</h2>
       
-      <div className="space-y-2">
-        {runs.slice(0, 10).map((run) => (
-          <div key={run.id} className="flex items-center justify-between rounded border border-gray-100 p-3">
-            <div className="flex-1">
-              <p className="text-sm font-medium text-gray-900">
-                {new Date(run.completed_at).toLocaleString()}
-              </p>
-              <p className="text-xs text-gray-500">
-                Models: {run.model_counts?.map((m: any) => ` ${m.model}`) || 'Unknown'}
-              </p>
-            </div>
-            <span className={`inline-flex items-center rounded px-2.5 py-0.5 text-xs font-medium border ${statusClass(run.status)}`}>
-              {run.status || run.statuses?.[0] || 'unknown'}
-            </span>
-          </div>
-        ))}
+      <div className="overflow-x-auto">
+        <table className="min-w-full">
+          <thead>
+            <tr className="border-b">
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Run ID</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Date</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Duration</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Queries</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Success Rate</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase">Models</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {runs.slice(0, 20).map((run) => (
+              <tr key={run.run_id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 text-sm font-medium text-gray-900">#{run.run_id}</td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {new Date(run.started_at).toLocaleString()}
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">{run.duration || 'N/A'}</td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {run.successful_queries}/{run.total_queries}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <span className={`inline-flex items-center rounded px-2.5 py-0.5 text-xs font-medium ${rateClass(run.success_rate)}`}>
+                    {run.success_rate?.toFixed(1)}%
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-sm text-gray-600">
+                  {run.models_used?.join(', ') || 'Unknown'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
       
-      {runs.length > 10 && (
-        <p className="text-xs text-gray-500 text-center pt-2">
-          Showing {runs.slice(0, 10).length} of {runs.length} runs
+      {runs.length > 20 && (
+        <p className="text-xs text-gray-700 text-center pt-2">
+          Showing {runs.slice(0, 20).length} of {runs.length} runs
         </p>
       )}
     </div>
