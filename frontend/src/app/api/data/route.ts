@@ -101,6 +101,11 @@ export async function GET(request: Request) {
           await proxyToBackend('/convergence-live')
         );
 
+      case 'model-comparison':
+        return NextResponse.json(
+          await proxyToBackend(`/models?brand=${brandParam}&days=${daysParam}`)
+        );
+
       case 'sentiment': {
         const runId = searchParams.get('run_id') || '0';
         return NextResponse.json(

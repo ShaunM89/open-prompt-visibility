@@ -36,6 +36,27 @@ models:
     enabled: false
     temperature: 0.7
 
+# Named Scenarios
+# Predefined model configurations for common use cases.
+# Activate with: pvt run --scenario <name>
+scenarios:
+  quick_test:
+    models:
+      - provider: "ollama"
+        model: "gemma4:e2b"
+        enabled: true
+        temperature: 0.7
+  full_comparison:
+    models:
+      - provider: "ollama"
+        model: "gemma4:e2b"
+        enabled: true
+        temperature: 0.7
+      - provider: "ollama"
+        model: "nemotron-3-nano:4b"
+        enabled: true
+        temperature: 0.7
+
 # Tracking Parameters
 tracking:
   # Queries per prompt (affects statistical significance)

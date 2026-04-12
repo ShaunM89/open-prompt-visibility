@@ -1,6 +1,7 @@
 """CLI entry point for AI Visibility Tracker."""
 
 import sys
+import os
 from pathlib import Path
 
 import click
@@ -101,6 +102,18 @@ def cli():
     help="Override config and run only this model (format: provider:model)",
 )
 @click.option(
+    "--models",
+    "add_models_csv",
+    default=None,
+    help="Comma-separated model specs (format: provider:model,...). Adds to config models.",
+)
+@click.option(
+    "--scenario",
+    "scenario_name",
+    default=None,
+    help="Use a named scenario from config (replaces models list).",
+)
+@click.option(
     "--target-ci-width",
     type=float,
     default=None,
@@ -139,7 +152,9 @@ def run_cli(
     enable_auto_gen: bool,
     auto_gen_per_brand: int,
     add_models: tuple,
+    add_models_csv: str,
     override_model: str,
+    scenario_name: str,
     target_ci_width: float,
     max_queries: int,
     convergence_scope: str,
@@ -151,6 +166,8 @@ def run_cli(
         console.print(f"[blue]Loading configuration from {config}...[/blue]")
         tracker = VisibilityTracker(config)
 
+        # Model selection precedence:
+        # --model-only > --scenario > env vars (PVT_DEFAULT_MODEL > PVT_MODELS) > --model/--models > config
         if override_model:
             provider, model_name = _parse_model_spec(override_model)
             tracker.config["models"] = [
@@ -163,19 +180,86 @@ def run_cli(
             ]
             tracker.adapters = tracker._init_adapters()
             console.print(f"[cyan]Model override: running only {provider}/{model_name}[/cyan]")
-        elif add_models:
-            for spec in add_models:
-                provider, model_name = _parse_model_spec(spec)
-                tracker.config["models"].append(
+
+        elif scenario_name:
+            scenarios = tracker.config.get("scenarios", {})
+            if scenario_name not in scenarios:
+                raise ValueError(
+                    f"Scenario '{scenario_name}' not found in config. "
+                    f"Available: {list(scenarios.keys())}"
+                )
+            scenario_models = scenarios[scenario_name].get("models", [])
+            if not scenario_models:
+                raise ValueError(f"Scenario '{scenario_name}' has no models defined")
+            tracker.config["models"] = scenario_models
+            tracker.adapters = tracker._init_adapters()
+            console.print(
+                f"[cyan]Loaded scenario '{scenario_name}' with {len(scenario_models)} model(s)[/cyan]"
+            )
+
+        else:
+            # No exclusive override: check env vars, then process additive CLI flags
+            if "PVT_DEFAULT_MODEL" in os.environ:
+                env_model = os.environ["PVT_DEFAULT_MODEL"]
+                provider, model_name = _parse_model_spec(env_model)
+                tracker.config["models"] = [
                     {
                         "provider": provider,
                         "model": model_name,
                         "enabled": True,
                         "temperature": 0.7,
                     }
+                ]
+                tracker.adapters = tracker._init_adapters()
+                console.print(
+                    f"[cyan]Model override from PVT_DEFAULT_MODEL: {provider}/{model_name}[/cyan]"
                 )
-            tracker.adapters = tracker._init_adapters()
-            console.print(f"[cyan]Added {len(add_models)} model(s) from CLI[/cyan]")
+
+            elif "PVT_MODELS" in os.environ:
+                env_specs = [s.strip() for s in os.environ["PVT_MODELS"].split(",") if s.strip()]
+                for spec in env_specs:
+                    provider, model_name = _parse_model_spec(spec)
+                    tracker.config["models"].append(
+                        {
+                            "provider": provider,
+                            "model": model_name,
+                            "enabled": True,
+                            "temperature": 0.7,
+                        }
+                    )
+                tracker.adapters = tracker._init_adapters()
+                console.print(f"[cyan]Added {len(env_specs)} model(s) from PVT_MODELS[/cyan]")
+
+            # CLI: --model (additive, repeated)
+            if add_models:
+                for spec in add_models:
+                    provider, model_name = _parse_model_spec(spec)
+                    tracker.config["models"].append(
+                        {
+                            "provider": provider,
+                            "model": model_name,
+                            "enabled": True,
+                            "temperature": 0.7,
+                        }
+                    )
+                tracker.adapters = tracker._init_adapters()
+                console.print(f"[cyan]Added {len(add_models)} model(s) from CLI[/cyan]")
+
+            # CLI: --models (additive, comma-separated)
+            if add_models_csv:
+                specs = [s.strip() for s in add_models_csv.split(",") if s.strip()]
+                for spec in specs:
+                    provider, model_name = _parse_model_spec(spec)
+                    tracker.config["models"].append(
+                        {
+                            "provider": provider,
+                            "model": model_name,
+                            "enabled": True,
+                            "temperature": 0.7,
+                        }
+                    )
+                tracker.adapters = tracker._init_adapters()
+                console.print(f"[cyan]Added {len(specs)} model(s) from --models[/cyan]")
         # Override config with CLI flags
         if enable_variations:
             tracker.config.setdefault("tracking", {}).setdefault("prompt_variations", {})[

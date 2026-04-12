@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, ErrorBar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, fetchLatestSentiment, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus, SentimentData } from '../lib/api';
+import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, fetchLatestSentiment, fetchModelComparison, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus, SentimentData, ModelComparisonData } from '../lib/api';
 
-type Tab = 'overview' | 'competitors' | 'prompts' | 'history' | 'stats' | 'sentiment' | 'settings';
+type Tab = 'overview' | 'compare' | 'competitors' | 'prompts' | 'history' | 'stats' | 'sentiment' | 'settings';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -27,6 +27,7 @@ export default function Home() {
   const [statSummary, setStatSummary] = useState<StatisticalSummary | null>(null);
   const [convergenceStatus, setConvergenceStatus] = useState<ConvergenceStatus | null>(null);
   const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
+  const [modelComparisonData, setModelComparisonData] = useState<ModelComparisonData | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -42,6 +43,9 @@ export default function Home() {
       } else if (activeTab === 'competitors') {
         const compData = await fetchCompetitorComparison(brand, days);
         setCompetitorData(compData);
+      } else if (activeTab === 'compare') {
+        const compData = await fetchModelComparison(brand, days);
+        setModelComparisonData(compData);
       } else if (activeTab === 'prompts') {
         const promptsData = await fetchPromptList(brand, days, promptPage, 25, null, successFilter);
         setPromptList(promptsData);
@@ -175,6 +179,7 @@ export default function Home() {
           <nav className="-mb-px flex space-x-8">
             {[
               { id: 'overview', label: 'Overview' },
+              { id: 'compare', label: 'Compare' },
               { id: 'competitors', label: 'Competitors' },
               { id: 'prompts', label: 'Prompt Details' },
               { id: 'history', label: 'Run History' },
@@ -320,6 +325,182 @@ export default function Home() {
                 <p className="text-gray-900 text-center py-8">No model comparison data available</p>
               )}
             </div>
+          </>
+        )}
+
+        {!loading && activeTab === 'compare' && modelComparisonData && (
+          <>
+            {modelComparisonData.models.length < 2 ? (
+              <div className="bg-white shadow rounded-lg p-8 text-center">
+                <p className="text-gray-900 text-lg font-medium mb-2">Not enough models to compare</p>
+                <p className="text-gray-600 text-sm">
+                  Run a batch with multiple models to see head-to-head comparison. Use:
+                </p>
+                <pre className="bg-gray-50 p-3 rounded mt-3 text-xs overflow-x-auto inline-block text-left">{`pvt run --models "ollama:model-a,ollama:model-b"
+pvt run --scenario full_comparison`}</pre>
+              </div>
+            ) : (
+              <>
+                {/* Head-to-head comparison chart */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                  <div className="bg-white shadow rounded-lg p-6">
+                    <h2 className="text-lg font-medium text-gray-900 mb-4">Mention Rate by Model</h2>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={modelComparisonData.models.map(m => ({
+                        name: m.model_name,
+                        rate: m.mention_rate,
+                        ci_lower: m.confidence_interval ? m.mention_rate - m.confidence_interval[0] : 0,
+                        ci_upper: m.confidence_interval ? m.confidence_interval[1] - m.mention_rate : 0,
+                      }))}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis domain={[0, 100]} />
+                        <Tooltip formatter={(value) => `${Number(value).toFixed(1)}%`} />
+                        <Bar dataKey="rate" fill="#6366f1">
+                          {modelComparisonData.models[0] && (
+                            <ErrorBar dataKey="ci_lower" width={4} strokeWidth={2} direction="y" />
+                          )}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="bg-white shadow rounded-lg p-6">
+                    <h2 className="text-lg font-medium text-gray-900 mb-4">Delta from Best Model</h2>
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={modelComparisonData.models.map((m, _i) => {
+                        const bestRate = modelComparisonData.models[0]?.mention_rate || 0;
+                        return {
+                          name: m.model_name,
+                          delta: m.mention_rate - bestRate,
+                        };
+                      })} layout="vertical">
+                        <XAxis type="number" tickFormatter={(v: number) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`} />
+                        <YAxis type="category" dataKey="name" width={140} />
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <Tooltip formatter={(value) => `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`} />
+                        <Bar dataKey="delta" fill="#f59e0b" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Detailed comparison table */}
+                <div className="bg-white shadow rounded-lg p-6 mb-8">
+                  <h2 className="text-lg font-medium text-gray-900 mb-4">
+                    Head-to-Head Comparison for {brand} ({days} days)
+                  </h2>
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Model</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mention Rate</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">95% CI</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Queries</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mentions</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Std Error</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Significance</th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Delta</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {modelComparisonData.models.map((m, i) => {
+                        const bestRate = modelComparisonData.models[0]?.mention_rate || 0;
+                        const delta = i === 0 ? 0 : m.mention_rate - bestRate;
+                        return (
+                          <tr key={m.model_name} className={i === 0 ? 'bg-green-50' : ''}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                              {m.model_name}
+                              {i === 0 && <span className="ml-2 text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">Best</span>}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                              {m.mention_rate.toFixed(1)}%
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {m.confidence_interval
+                                ? `[${m.confidence_interval[0].toFixed(1)} - ${m.confidence_interval[1].toFixed(1)}]%`
+                                : 'N/A'
+                              }
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.total_runs}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.mentions}</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{m.standard_error.toFixed(2)}%</td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {m.statistical_significance === 'significant' ? (
+                                <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">Significant</span>
+                              ) : m.statistical_significance === 'N/A' ? (
+                                <span className="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">N/A</span>
+                              ) : (
+                                <span className="px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-800">{m.statistical_significance}</span>
+                              )}
+                            </td>
+                            <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${i === 0 ? 'text-green-600' : delta >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {i === 0 ? '\u2014' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Overlap analysis */}
+                {modelComparisonData.models.length === 2 && modelComparisonData.models[0].confidence_interval && modelComparisonData.models[1].confidence_interval && (
+                  <div className="bg-white shadow rounded-lg p-6">
+                    <h2 className="text-lg font-medium text-gray-900 mb-4">CI Overlap Analysis</h2>
+                    {(() => {
+                      const m1 = modelComparisonData.models[0];
+                      const m2 = modelComparisonData.models[1];
+                      const ci1 = m1.confidence_interval!;
+                      const ci2 = m2.confidence_interval!;
+                      const overlaps = ci1[1] >= ci2[0] && ci2[1] >= ci1[0];
+                      return (
+                        <div>
+                          <div className="flex items-center gap-4 mb-4">
+                            <span className={`px-3 py-1 rounded-full text-sm font-medium ${overlaps ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                              {overlaps ? 'CIs Overlap' : 'CIs Do Not Overlap'}
+                            </span>
+                            <span className="text-sm text-gray-600">
+                              {overlaps
+                                ? 'The confidence intervals overlap, meaning the difference between models may not be statistically significant.'
+                                : 'The confidence intervals do not overlap, suggesting a statistically meaningful difference between models.'}
+                            </span>
+                          </div>
+                          {/* Visual CI comparison */}
+                          <div className="space-y-3">
+                            {modelComparisonData.models.map((m) => {
+                              const ci = m.confidence_interval!;
+                              const range = Math.max(modelComparisonData.models[0].confidence_interval![1], modelComparisonData.models[1]?.confidence_interval![1] || 0) -
+                                            Math.min(modelComparisonData.models[0].confidence_interval![0], modelComparisonData.models[1]?.confidence_interval![0] || 100);
+                              const left = ((ci[0] - Math.min(modelComparisonData.models[0].confidence_interval![0], modelComparisonData.models[1]?.confidence_interval![0] || 100)) / (range || 1)) * 100;
+                              const width = ((ci[1] - ci[0]) / (range || 1)) * 100;
+                              return (
+                                <div key={m.model_name} className="flex items-center gap-3">
+                                  <span className="text-sm font-medium text-gray-900 w-40 truncate">{m.model_name}</span>
+                                  <div className="flex-1 bg-gray-100 rounded-full h-6 relative">
+                                    <div
+                                      className="absolute h-full bg-indigo-400 rounded-full opacity-60"
+                                      style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
+                                    />
+                                    <div
+                                      className="absolute h-full w-0.5 bg-indigo-900"
+                                      style={{ left: `${((m.mention_rate - (Math.min(modelComparisonData.models[0].confidence_interval![0], modelComparisonData.models[1]?.confidence_interval![0] || 100))) / (range || 1)) * 100}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs text-gray-600 w-32 text-right">
+                                    {ci[0].toFixed(1)}% \u2013 {ci[1].toFixed(1)}%
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
 
