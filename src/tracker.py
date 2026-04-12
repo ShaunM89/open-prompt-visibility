@@ -189,14 +189,30 @@ class VisibilityTracker:
         """
         all_prompts = {}
 
-        # Start with base prompts
-        for category, prompts in self.config["prompts"].items():
-            all_prompts[category] = prompts.copy()
+        # Handle both old format (dict of category -> string list) and
+        # new format (list of structured prompt entries from PromptCompiler)
+        prompts_config = self.config.get("prompts", {})
+        if isinstance(prompts_config, list):
+            # New structured format: prompts is a list of dicts with canonical_id, prompts, tags
+            structured_texts = []
+            for entry in prompts_config:
+                if isinstance(entry, dict) and "prompts" in entry:
+                    for p in entry["prompts"]:
+                        if isinstance(p, str) and p not in structured_texts:
+                            structured_texts.append(p)
+                elif isinstance(entry, str) and entry not in structured_texts:
+                    structured_texts.append(entry)
+            all_prompts["structured"] = structured_texts
+        elif isinstance(prompts_config, dict):
+            # Old format: dict of category -> list of strings
+            for category, prompts in prompts_config.items():
+                if isinstance(prompts, list):
+                    all_prompts[category] = [p for p in prompts if isinstance(p, str)]
 
         # Add variations if enabled
         if enable_variations:
             base_prompts = []
-            for prompts in self.config["prompts"].values():
+            for prompts in all_prompts.values():
                 base_prompts.extend(prompts)
 
             if base_prompts:
