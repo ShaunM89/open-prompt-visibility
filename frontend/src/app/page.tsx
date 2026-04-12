@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, ErrorBar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
-import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, fetchLatestSentiment, fetchModelComparison, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus, SentimentData, ModelComparisonData } from '../lib/api';
+import { fetchData, fetchVisibilityScore, fetchCompetitorComparison, fetchPromptList, fetchPromptDetail, fetchRunHistory, fetchStatisticalSummary, fetchConvergenceStatus, fetchLatestSentiment, fetchModelComparison, fetchVisibilityBySegment, VisibilityScoreData, CompetitorComparison, PromptListData, StatisticalSummary, RunHistoryEntry, ConvergenceStatus, SentimentData, ModelComparisonData, SegmentData } from '../lib/api';
 
-type Tab = 'overview' | 'compare' | 'competitors' | 'prompts' | 'history' | 'stats' | 'sentiment' | 'settings';
+type Tab = 'overview' | 'compare' | 'competitors' | 'prompts' | 'history' | 'stats' | 'sentiment' | 'segments' | 'settings';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
@@ -28,6 +28,8 @@ export default function Home() {
   const [convergenceStatus, setConvergenceStatus] = useState<ConvergenceStatus | null>(null);
   const [sentimentData, setSentimentData] = useState<SentimentData | null>(null);
   const [modelComparisonData, setModelComparisonData] = useState<ModelComparisonData | null>(null);
+  const [segmentDimension, setSegmentDimension] = useState<string>('intent');
+  const [segmentData, setSegmentData] = useState<SegmentData | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -63,13 +65,16 @@ export default function Home() {
       } else if (activeTab === 'sentiment') {
         const sentiment = await fetchLatestSentiment();
         setSentimentData(sentiment);
+      } else if (activeTab === 'segments') {
+        const segData = await fetchVisibilityBySegment(brand, segmentDimension, days);
+        setSegmentData(segData);
       }
       
       setLoading(false);
     };
     
     loadData();
-  }, [brand, days, activeTab, promptPage, successFilter]);
+  }, [brand, days, activeTab, promptPage, successFilter, segmentDimension]);
 
   const chartData = overview?.trends?.reduce((acc: any[], t: any) => {
     const existing = acc.find(d => d.date === t.date);
@@ -185,6 +190,7 @@ export default function Home() {
               { id: 'history', label: 'Run History' },
               { id: 'stats', label: 'Statistics' },
               { id: 'sentiment', label: 'Sentiment' },
+              { id: 'segments', label: 'Segments' },
               { id: 'settings', label: 'Settings' },
             ].map((tab) => (
               <button
@@ -1101,6 +1107,131 @@ pvt run --scenario full_comparison`}</pre>
                 </>
               )}
             </div>
+          </div>
+        )}
+
+        {!loading && activeTab === 'segments' && (
+          <div>
+            {/* Dimension Picker */}
+            <div className="mb-6 flex items-center gap-4">
+              <label className="text-sm font-medium text-gray-900">Segment by:</label>
+              <select
+                value={segmentDimension}
+                onChange={(e) => setSegmentDimension(e.target.value)}
+                className="rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border text-gray-900"
+              >
+                <option value="intent">Intent</option>
+                <option value="purchase_stage">Purchase Stage</option>
+                <option value="topic">Topic</option>
+                <option value="query_type">Query Type</option>
+              </select>
+            </div>
+
+            {segmentData && segmentData.segments.length > 0 ? (
+              <>
+                {/* Bar Chart */}
+                <div className="bg-white shadow rounded-lg p-6 mb-8">
+                  <h2 className="text-lg font-medium text-gray-900 mb-4">
+                    Mention Rate by {segmentDimension === 'intent' ? 'Intent' :
+                      segmentDimension === 'purchase_stage' ? 'Purchase Stage' :
+                      segmentDimension === 'topic' ? 'Topic' : 'Query Type'} ({brand})
+                  </h2>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <BarChart
+                      data={segmentData.segments.map(s => ({
+                        name: s.segment_value,
+                        rate: s.mention_rate,
+                        queries: s.total_queries,
+                        ci_lower: s.confidence_interval ? s.mention_rate - s.confidence_interval[0] : 0,
+                        ci_upper: s.confidence_interval ? s.confidence_interval[1] - s.mention_rate : 0,
+                      }))}
+                      layout="vertical"
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                      <YAxis type="category" dataKey="name" width={120} />
+                      <Tooltip formatter={(value) => `${Number(value).toFixed(1)}%`} />
+                      <Bar dataKey="rate" fill="#6366f1">
+                        {segmentData.segments[0]?.confidence_interval && (
+                          <ErrorBar dataKey="ci_lower" width={4} strokeWidth={2} direction="x" />
+                        )}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Segment Table */}
+                <div className="bg-white shadow rounded-lg p-6">
+                  <h2 className="text-lg font-medium text-gray-900 mb-4">
+                    Segment Breakdown ({segmentData.segments.length} segments)
+                  </h2>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">
+                            {segmentDimension === 'intent' ? 'Intent' :
+                             segmentDimension === 'purchase_stage' ? 'Purchase Stage' :
+                             segmentDimension === 'topic' ? 'Topic' : 'Query Type'}
+                          </th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Queries</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Mentions</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">Rate</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-900 uppercase">95% CI</th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {segmentData.segments
+                          .sort((a, b) => b.mention_rate - a.mention_rate)
+                          .map((seg) => (
+                          <tr key={seg.segment_value}>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 capitalize">
+                              {seg.segment_value.replace('_', ' ')}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {seg.total_queries}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {seg.mention_count}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-900">
+                              <span className={`${
+                                seg.mention_rate >= 50 ? 'text-green-600' :
+                                seg.mention_rate >= 25 ? 'text-yellow-600' :
+                                'text-red-600'
+                              }`}>
+                                {seg.mention_rate.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                              {seg.confidence_interval
+                                ? `[${seg.confidence_interval[0].toFixed(1)} - ${seg.confidence_interval[1].toFixed(1)}]%`
+                                : 'N/A'
+                              }
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="bg-white shadow rounded-lg p-8 text-center">
+                <p className="text-gray-900 text-lg font-medium mb-2">No segment data available</p>
+                <p className="text-gray-600 text-sm mb-4">
+                  Generate and classify prompts first using the CLI:
+                </p>
+                <pre className="bg-gray-50 p-3 rounded mt-3 text-xs overflow-x-auto inline-block text-left">{`# Generate classified prompts
+pvt prompts generate --brand ${brand} --keywords running,basketball,sustainability
+
+# Or classify existing prompts
+pvt prompts classify --brand ${brand}
+
+# Then run a tracking batch
+pvt run`}</pre>
+              </div>
+            )}
           </div>
         )}
 

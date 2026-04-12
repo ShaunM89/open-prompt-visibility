@@ -79,6 +79,28 @@ class TrackDatabase:
             except sqlite3.OperationalError:
                 pass
 
+            # Phase: Prompt classification — add prompt_tags and canonical_id columns
+            try:
+                cursor.execute(
+                    "ALTER TABLE visibility_records ADD COLUMN prompt_tags TEXT DEFAULT '{}'"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute(
+                    "ALTER TABLE visibility_records ADD COLUMN canonical_id TEXT DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_canonical_id ON visibility_records(canonical_id)"
+                )
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
         finally:
             conn.close()
@@ -125,6 +147,8 @@ class TrackDatabase:
         prompt: str,
         response_text: str,
         mentions: Dict[str, int],
+        prompt_tags: str = "{}",
+        canonical_id: str = "",
     ) -> int:
         """Record a single query result. Returns record id."""
         conn = self._get_connection()
@@ -133,8 +157,9 @@ class TrackDatabase:
             cursor.execute(
                 """
                 INSERT INTO visibility_records 
-                (run_id, model_provider, model_name, prompt, response_text, mentions_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (run_id, model_provider, model_name, prompt, response_text, mentions_json,
+                 prompt_tags, canonical_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -143,6 +168,8 @@ class TrackDatabase:
                     prompt,
                     response_text,
                     json.dumps(mentions),
+                    prompt_tags,
+                    canonical_id,
                 ),
             )
             conn.commit()
@@ -452,6 +479,204 @@ class TrackDatabase:
 
             conn.commit()
             return records_deleted
+        finally:
+            conn.close()
+
+    def get_visibility_by_segment(
+        self, brand_keyword: str, dimension: str, days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Get mention rates grouped by a prompt tag dimension.
+
+        Args:
+            brand_keyword: Brand to check mentions for
+            dimension: One of 'intent', 'purchase_stage', 'topic', 'query_type'
+            days: Lookback period
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            # Get all records with non-empty prompt_tags in the period
+            cursor.execute(
+                """
+                SELECT prompt_tags, mentions_json
+                FROM visibility_records
+                WHERE detected_at > ?
+                AND prompt_tags IS NOT NULL
+                AND prompt_tags != '{}'
+                """,
+                (cutoff,),
+            )
+
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+
+            # Group by dimension value and count mentions
+            segments: Dict[str, Dict[str, int]] = {}
+            for row in rows:
+                try:
+                    tags = json.loads(row["prompt_tags"])
+                    mentions = json.loads(row["mentions_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                dim_value = tags.get(dimension, "unknown")
+                if dim_value not in segments:
+                    segments[dim_value] = {"total": 0, "mentions": 0}
+
+                segments[dim_value]["total"] += 1
+                if brand_keyword in mentions:
+                    segments[dim_value]["mentions"] += 1
+
+            # Convert to list with rates
+            result = []
+            for value, counts in sorted(segments.items()):
+                rate = (counts["mentions"] / counts["total"] * 100) if counts["total"] > 0 else 0
+                result.append(
+                    {
+                        "segment_value": value,
+                        "total_queries": counts["total"],
+                        "mention_count": counts["mentions"],
+                        "mention_rate": round(rate, 2),
+                    }
+                )
+            return result
+        finally:
+            conn.close()
+
+    def get_segment_comparison(
+        self, brand_keywords: List[str], dimension: str, days: int = 30
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """Side-by-side mention rates per brand per segment.
+
+        Args:
+            brand_keywords: List of brand keywords to compare
+            dimension: Tag dimension to segment by
+            days: Lookback period
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            cursor.execute(
+                """
+                SELECT prompt_tags, mentions_json
+                FROM visibility_records
+                WHERE detected_at > ?
+                AND prompt_tags IS NOT NULL
+                AND prompt_tags != '{}'
+                """,
+                (cutoff,),
+            )
+
+            rows = cursor.fetchall()
+            if not rows:
+                return {}
+
+            # Nested grouping: brand -> dimension_value -> counts
+            brand_segments: Dict[str, Dict[str, Dict[str, int]]] = {}
+            for brand_kw in brand_keywords:
+                brand_segments[brand_kw] = {}
+
+            for row in rows:
+                try:
+                    tags = json.loads(row["prompt_tags"])
+                    mentions = json.loads(row["mentions_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                dim_value = tags.get(dimension, "unknown")
+
+                for brand_kw in brand_keywords:
+                    if dim_value not in brand_segments[brand_kw]:
+                        brand_segments[brand_kw][dim_value] = {"total": 0, "mentions": 0}
+
+                    brand_segments[brand_kw][dim_value]["total"] += 1
+                    if brand_kw in mentions:
+                        brand_segments[brand_kw][dim_value]["mentions"] += 1
+
+            # Convert to output format
+            result = {}
+            for brand_kw, segments in brand_segments.items():
+                brand_data = []
+                for value, counts in sorted(segments.items()):
+                    rate = (
+                        (counts["mentions"] / counts["total"] * 100) if counts["total"] > 0 else 0
+                    )
+                    brand_data.append(
+                        {
+                            "segment_value": value,
+                            "total_queries": counts["total"],
+                            "mention_count": counts["mentions"],
+                            "mention_rate": round(rate, 2),
+                        }
+                    )
+                result[brand_kw] = brand_data
+            return result
+        finally:
+            conn.close()
+
+    def get_variation_drift(
+        self, canonical_id: str, brand_keyword: str, days: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Per-prompt mention rates for a single canonical prompt group.
+
+        Args:
+            canonical_id: The canonical prompt group to analyze
+            brand_keyword: Brand to check mentions for
+            days: Lookback period
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+            cursor.execute(
+                """
+                SELECT prompt, mentions_json, canonical_id
+                FROM visibility_records
+                WHERE detected_at > ?
+                AND canonical_id = ?
+                """,
+                (cutoff, canonical_id),
+            )
+
+            rows = cursor.fetchall()
+            if not rows:
+                return []
+
+            # Group by exact prompt text
+            prompt_stats: Dict[str, Dict[str, int]] = {}
+            for row in rows:
+                prompt_text = row["prompt"]
+                try:
+                    mentions = json.loads(row["mentions_json"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    mentions = {}
+
+                if prompt_text not in prompt_stats:
+                    prompt_stats[prompt_text] = {"total": 0, "mentions": 0}
+
+                prompt_stats[prompt_text]["total"] += 1
+                if brand_keyword in mentions:
+                    prompt_stats[prompt_text]["mentions"] += 1
+
+            # Convert to list
+            result = []
+            for prompt_text, counts in prompt_stats.items():
+                rate = (counts["mentions"] / counts["total"] * 100) if counts["total"] > 0 else 0
+                result.append(
+                    {
+                        "prompt": prompt_text,
+                        "total_queries": counts["total"],
+                        "mention_count": counts["mentions"],
+                        "mention_rate": round(rate, 2),
+                    }
+                )
+            return result
         finally:
             conn.close()
 

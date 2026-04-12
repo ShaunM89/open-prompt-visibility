@@ -54,10 +54,11 @@ src/
   models.py              # LLM model adapters (Ollama, OpenAI, etc.)
   analyzer.py            # Mention detection + statistical analysis
   storage.py             # SQLite database layer
-  prompt_generator.py    # Prompt variations + auto-generation
+  prompt_compiler.py     # Structured prompt generation, classification, validation
+  prompt_generator.py    # [DEPRECATED] Prompt variations + auto-generation
   api/
     __init__.py           # FastAPI app
-    prompts.py            # API endpoints
+    prompts.py            # API endpoints (data, segments, sentiment, etc.)
 frontend/                # Next.js dashboard
 configs/                 # YAML configuration files
 tests/                   # pytest test suite

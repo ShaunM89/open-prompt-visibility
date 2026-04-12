@@ -12,6 +12,7 @@ from rich.table import Table
 from src.tracker import VisibilityTracker
 from src.storage import TrackDatabase
 from src.analyzer import AnalyticsEngine
+from src.prompt_compiler import PromptCompiler, StructuredPrompt
 
 # Enable rich click for better CLI formatting
 click_rich.click_rich_style = {
@@ -493,6 +494,249 @@ def serve_cli(host: str, port: int, reload: bool):
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Failed to start API server: {e}[/red]")
+        sys.exit(1)
+
+
+# --- pvt prompts command group ---
+
+
+@cli.group("prompts")
+def prompts_group():
+    """Manage structured prompt test sets.
+
+    Examples:
+        pvt prompts generate --brand Nike --keywords running,basketball
+        pvt prompts classify --brand Nike
+        pvt prompts list
+        pvt prompts validate
+    """
+    pass
+
+
+@prompts_group.command("generate")
+@click.option("--brand", required=True, help="Brand name to generate prompts for")
+@click.option("--keywords", required=True, help="Comma-separated topic keywords")
+@click.option(
+    "--num-prompts", default=50, help="Number of canonical prompts to generate (default: 50)"
+)
+@click.option(
+    "--output",
+    "-o",
+    default="configs/users/prompts.yaml",
+    help="Output file path",
+)
+@click.option("--config", "-c", default="configs/default.yaml", help="Config file")
+def prompts_generate(brand: str, keywords: str, num_prompts: int, output: str, config: str):
+    """Generate a classified prompt set using LLM."""
+    from src.prompt_compiler import PromptCompiler
+
+    try:
+        console.print(f"[blue]Loading configuration from {config}...[/blue]")
+        tracker = VisibilityTracker(config)
+        compiler = PromptCompiler(tracker.config)
+
+        keywords_list = [k.strip() for k in keywords.split(",") if k.strip()]
+        console.print(
+            f"[cyan]Generating {num_prompts} prompts for {brand} "
+            f"(topics: {', '.join(keywords_list)})...[/cyan]"
+        )
+
+        structured = compiler.generate(brand, keywords_list, num_prompts)
+
+        if not structured:
+            console.print("[red]No prompts generated. Check LLM availability.[/red]")
+            sys.exit(1)
+
+        compiler.save_prompts(structured, output)
+
+        # Summary
+        from collections import Counter
+
+        intent_counts = Counter(sp.tags.intent for sp in structured)
+        topic_counts = Counter(sp.tags.topic for sp in structured)
+        total_variations = sum(len(sp.prompts) - 1 for sp in structured)
+
+        console.print(f"\n[bold green]Generated {len(structured)} canonical prompts[/bold green]")
+        console.print(f"  Total with variations: {sum(len(sp.prompts) for sp in structured)}")
+        console.print(f"  Variations: {total_variations}")
+        console.print(f"\n  [bold]By intent:[/bold]")
+        for intent, count in intent_counts.most_common():
+            console.print(f"    {intent}: {count}")
+        console.print(f"  [bold]By topic:[/bold]")
+        for topic, count in topic_counts.most_common():
+            console.print(f"    {topic}: {count}")
+        console.print(f"\n  Written to: {output}")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Generation failed: {e}[/red]")
+        sys.exit(1)
+
+
+@prompts_group.command("classify")
+@click.option(
+    "--input", "input_path", default="configs/users/prompts.yaml", help="Input prompts file"
+)
+@click.option("--brand", required=True, help="Brand name for query_type detection")
+@click.option("--config", "-c", default="configs/default.yaml", help="Config file")
+def prompts_classify(input_path: str, brand: str, config: str):
+    """Classify untagged prompts using LLM."""
+    from src.prompt_compiler import PromptCompiler
+
+    try:
+        console.print(f"[blue]Loading configuration from {config}...[/blue]")
+        tracker = VisibilityTracker(config)
+        compiler = PromptCompiler(tracker.config)
+
+        console.print(f"[cyan]Loading prompts from {input_path}...[/cyan]")
+        all_prompts = compiler.load_prompts(input_path)
+
+        if not all_prompts:
+            console.print("[yellow]No prompts found in file.[/yellow]")
+            return
+
+        # Separate tagged from untagged
+        tagged = [sp for sp in all_prompts if sp.tags.is_complete()]
+        untagged = [sp for sp in all_prompts if not sp.tags.is_complete()]
+
+        console.print(
+            f"  Found {len(all_prompts)} prompts: "
+            f"{len(tagged)} already tagged, {len(untagged)} need classification"
+        )
+
+        if not untagged:
+            console.print("[green]All prompts already classified![/green]")
+            return
+
+        # Classify untagged prompts
+        untagged_texts = [sp.canonical_prompt() for sp in untagged if sp.canonical_prompt()]
+        console.print(f"[cyan]Classifying {len(untagged_texts)} prompts...[/cyan]")
+
+        classified = compiler.classify_prompts(untagged_texts)
+
+        # Merge: classified replaces untagged
+        merged = tagged + classified
+
+        compiler.save_prompts(merged, input_path)
+
+        console.print(f"\n[bold green]Classified {len(classified)} prompts[/bold green]")
+        console.print(f"  Total prompts in file: {len(merged)}")
+        console.print(f"  Written to: {input_path}")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Classification failed: {e}[/red]")
+        sys.exit(1)
+
+
+@prompts_group.command("list")
+@click.option(
+    "--input", "input_path", default="configs/users/prompts.yaml", help="Input prompts file"
+)
+@click.option("--filter-intent", default=None, help="Filter by intent type")
+@click.option("--filter-topic", default=None, help="Filter by topic")
+@click.option("--config", "-c", default="configs/default.yaml", help="Config file")
+def prompts_list(input_path: str, filter_intent: str, filter_topic: str, config: str):
+    """Display current prompt set with tags and variation counts."""
+    from src.prompt_compiler import PromptCompiler
+
+    try:
+        tracker = VisibilityTracker(config)
+        compiler = PromptCompiler(tracker.config)
+        all_prompts = compiler.load_prompts(input_path)
+
+        if not all_prompts:
+            console.print(f"[yellow]No prompts found in {input_path}[/yellow]")
+            return
+
+        # Apply filters
+        filtered = all_prompts
+        if filter_intent:
+            filtered = [sp for sp in filtered if sp.tags.intent == filter_intent]
+        if filter_topic:
+            filtered = [sp for sp in filtered if sp.tags.topic == filter_topic]
+
+        table = Table(title=f"Prompt Set ({len(filtered)} prompts, {input_path})")
+        table.add_column("Canonical ID", style="cyan", max_width=16)
+        table.add_column("Prompt", style="white", max_width=50, no_wrap=False)
+        table.add_column("Intent", style="green", max_width=16)
+        table.add_column("Stage", style="yellow", max_width=13)
+        table.add_column("Topic", style="blue", max_width=15)
+        table.add_column("Type", style="magenta", max_width=10)
+        table.add_column("Vars", style="white", justify="right", max_width=4)
+
+        for sp in filtered:
+            canonical = sp.canonical_prompt()
+            prompt_display = canonical[:47] + "..." if len(canonical) > 50 else canonical
+
+            cid = sp.canonical_id or "(none)"
+            intent = sp.tags.intent or "(unclassified)"
+            stage = sp.tags.purchase_stage or "(unclassified)"
+            topic = sp.tags.topic or "(unclassified)"
+            qtype = sp.tags.query_type or "(unclassified)"
+            var_count = str(max(0, len(sp.prompts) - 1))
+
+            table.add_row(cid, prompt_display, intent, stage, topic, qtype, var_count)
+
+        console.print(table)
+
+        # Summary
+        from collections import Counter
+
+        console.print(f"\n[bold]Summary:[/bold]")
+        console.print(f"  Total canonical prompts: {len(filtered)}")
+        console.print(f"  Total with variations: {sum(len(sp.prompts) for sp in filtered)}")
+
+        intent_counts = Counter(sp.tags.intent or "(unclassified)" for sp in filtered)
+        console.print(f"  [bold]By intent:[/bold]")
+        for intent, count in intent_counts.most_common():
+            console.print(f"    {intent}: {count}")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]List failed: {e}[/red]")
+        sys.exit(1)
+
+
+@prompts_group.command("validate")
+@click.option(
+    "--input", "input_path", default="configs/users/prompts.yaml", help="Input prompts file"
+)
+@click.option("--config", "-c", default="configs/default.yaml", help="Config file")
+def prompts_validate(input_path: str, config: str):
+    """Validate all prompts have complete tags and valid canonical IDs."""
+    from src.prompt_compiler import PromptCompiler
+
+    try:
+        tracker = VisibilityTracker(config)
+        compiler = PromptCompiler(tracker.config)
+        all_prompts = compiler.load_prompts(input_path)
+
+        if not all_prompts:
+            console.print(f"[yellow]No prompts found in {input_path}[/yellow]")
+            return
+
+        errors = compiler.validate_prompts(all_prompts)
+
+        if errors:
+            console.print(f"[bold red]Found {len(errors)} validation error(s):[/bold red]")
+            for error in errors:
+                console.print(f"  [red]✗[/red] {error}")
+            sys.exit(1)
+        else:
+            console.print(f"[bold green]All {len(all_prompts)} prompts are valid[/bold green]")
+
+    except FileNotFoundError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Validation failed: {e}[/red]")
         sys.exit(1)
 
 
