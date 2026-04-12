@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -56,6 +57,7 @@ class VisibilityTracker:
         self.generator = PromptGenerator(self.config)
         self.config_path = config_path
         self.config_hash = self._calculate_config_hash()
+        self._result_lock = threading.Lock()
 
         sentiment_mode = self.config.get("sentiment", {}).get("mode", "fast")
         if sentiment_mode != "off":
@@ -629,7 +631,8 @@ class VisibilityTracker:
                     response_text=response,
                     mentions=enriched_mentions,
                 )
-                result.successful_queries += 1
+                with self._result_lock:
+                    result.successful_queries += 1
                 success = True
                 break
             except Exception as e:
@@ -637,7 +640,8 @@ class VisibilityTracker:
                 time.sleep(2**attempt)
 
         if not success:
-            result.failed_queries += 1
+            with self._result_lock:
+                result.failed_queries += 1
 
         return success, error_msg, mentions, last_sentiment
 
