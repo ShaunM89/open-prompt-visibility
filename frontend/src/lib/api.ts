@@ -284,6 +284,30 @@ export interface ConvergencePair {
   ci: [number, number] | null;
 }
 
+export interface ModelComparisonModel {
+  model_name: string;
+  mention_rate: number;
+  total_runs: number;
+  mentions: number;
+  confidence_interval: [number, number] | null;
+  standard_error: number;
+  statistical_significance: string;
+}
+
+export interface ModelComparisonData {
+  brand: string;
+  models: ModelComparisonModel[];
+}
+
+export async function fetchModelComparison(brand: string, days: number): Promise<ModelComparisonData> {
+  try {
+    const data = await fetchApi('data', { brand, days, endpoint: 'model-comparison' });
+    return data;
+  } catch (err) {
+    return { brand, models: [] };
+  }
+}
+
 export async function fetchConvergenceStatus(runId: number): Promise<ConvergenceStatus | null> {
   try {
     const data = await fetchApi('data', { run_id: runId, endpoint: 'convergence-status' });

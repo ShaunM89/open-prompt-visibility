@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +57,7 @@ class VisibilityTracker:
         self.generator = PromptGenerator(self.config)
         self.config_path = config_path
         self.config_hash = self._calculate_config_hash()
+        self._result_lock = threading.Lock()
 
         sentiment_mode = self.config.get("sentiment", {}).get("mode", "fast")
         if sentiment_mode != "off":
@@ -374,6 +377,7 @@ class VisibilityTracker:
 
         if verbose:
             self._print_summary(result)
+            self._print_model_comparison(result.run_id)
 
         return result
 
@@ -392,76 +396,122 @@ class VisibilityTracker:
         max_q = sampler.max_queries
         check_interval = sampler.check_interval
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Running adaptive queries...", total=None)
+        # Pre-resolve model info once
+        model_info = {}
+        for model_key in enabled_models:
+            parts = model_key.split(":", 1)
+            model_info[model_key] = {
+                "adapter": self.adapters[model_key],
+                "provider": parts[0],
+                "model_name": parts[1] if len(parts) > 1 else model_key,
+            }
 
-            for model_key in enabled_models:
-                adapter = self.adapters[model_key]
-                parts = model_key.split(":", 1)
-                provider = parts[0]
-                model_name = parts[1] if len(parts) > 1 else model_key
+        with ThreadPoolExecutor(max_workers=len(enabled_models)) as executor:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Running adaptive queries...", total=None)
 
                 for prompt_category, prompts in all_prompts.items():
                     for prompt in prompts:
-                        queries = 0
-                        while queries < max_q:
-                            success, error_msg = self._execute_query(
-                                adapter,
-                                result,
-                                provider,
-                                model_name,
-                                prompt,
-                                max_retries,
-                                sentiment_mode=sentiment_mode,
-                            )
-                            if success and sampler:
-                                for brand in all_brands:
-                                    if sentiment_mode == "detailed" and self.sentiment_analyzer:
-                                        comp = result._last_sentiment.get(brand, {}).get(
-                                            "composite", 0.0
-                                        )
-                                        if brand in (result._last_mentions or {}):
-                                            sampler.record(model_name, prompt, brand, comp)
-                                    else:
-                                        mentioned = (
-                                            1.0 if brand in (result._last_mentions or {}) else 0.0
-                                        )
-                                        sampler.record(model_name, prompt, brand, mentioned)
-                            queries += 1
-                            result.total_queries += 1
-                            progress.update(
-                                task,
-                                description=(
-                                    f"  {model_name} — {prompt[:40]}... | "
-                                    f"{queries} queries, CI width: "
-                                    f"{sampler.get_stats(model_name, prompt, primary_brand).ci_width:.1f}%"
-                                    if sampler
-                                    and sampler.get_stats(model_name, prompt, primary_brand)
-                                    else f"  {model_name} — {queries} queries"
-                                ),
-                            )
+                        # Track per-model query counts and convergence independently
+                        model_queries = {m: 0 for m in enabled_models}
+                        converged_models = set()
 
-                            if queries >= sampler.min_queries and queries % check_interval == 0:
-                                if sampler.should_stop(
-                                    model_name, prompt, primary_brand, all_brands
-                                ):
-                                    if verbose:
-                                        stats = sampler.get_stats(model_name, prompt, primary_brand)
-                                        ci_w = (
-                                            f"{stats.ci_width:.1f}%"
-                                            if stats and stats.ci_width
-                                            else "N/A"
-                                        )
-                                        console.print(
-                                            f"  [green]Converged: {model_name} / {prompt[:40]}... "
-                                            f"after {queries} queries (CI: {ci_w})[/green]"
-                                        )
-                                    break
+                        while len(converged_models) < len(enabled_models):
+                            # Build work list: non-converged models that haven't hit max
+                            work_items = []
+                            for model_key in enabled_models:
+                                if model_key in converged_models:
+                                    continue
+                                if model_queries[model_key] >= max_q:
+                                    converged_models.add(model_key)
+                                    continue
+                                info = model_info[model_key]
+                                work_items.append((model_key, info))
 
+                            if not work_items:
+                                break
+
+                            # Submit all non-converged models in parallel
+                            futures = {}
+                            for model_key, info in work_items:
+                                future = executor.submit(
+                                    self._execute_query,
+                                    info["adapter"],
+                                    result,
+                                    info["provider"],
+                                    info["model_name"],
+                                    prompt,
+                                    max_retries,
+                                    sentiment_mode,
+                                )
+                                futures[future] = (model_key, info["model_name"])
+
+                            # Collect results
+                            for future in as_completed(futures):
+                                model_key, model_name = futures[future]
+                                try:
+                                    success, error_msg, mentions, last_sentiment = future.result()
+                                except Exception as e:
+                                    success, error_msg = False, str(e)
+                                    mentions, last_sentiment = {}, {}
+
+                                model_queries[model_key] += 1
+                                result.total_queries += 1
+
+                                if success and sampler:
+                                    for brand in all_brands:
+                                        if sentiment_mode == "detailed" and self.sentiment_analyzer:
+                                            comp = last_sentiment.get(brand, {}).get(
+                                                "composite", 0.0
+                                            )
+                                            if brand in mentions:
+                                                sampler.record(model_name, prompt, brand, comp)
+                                        else:
+                                            mentioned = 1.0 if brand in mentions else 0.0
+                                            sampler.record(model_name, prompt, brand, mentioned)
+
+                                # Update progress
+                                stats = sampler.get_stats(model_name, prompt, primary_brand)
+                                ci_w = (
+                                    f"{stats.ci_width:.1f}%" if stats and stats.ci_width else "N/A"
+                                )
+                                progress.update(
+                                    task,
+                                    description=(
+                                        f"  {model_name} — {prompt[:40]}... | "
+                                        f"{model_queries[model_key]} queries, CI width: {ci_w}"
+                                    ),
+                                )
+
+                            # Check convergence for each model after the batch
+                            for model_key in list(set(enabled_models) - converged_models):
+                                info = model_info[model_key]
+                                q = model_queries[model_key]
+                                if q >= sampler.min_queries and q % check_interval == 0:
+                                    if sampler.should_stop(
+                                        info["model_name"], prompt, primary_brand, all_brands
+                                    ):
+                                        converged_models.add(model_key)
+                                        if verbose:
+                                            stats = sampler.get_stats(
+                                                info["model_name"], prompt, primary_brand
+                                            )
+                                            ci_w = (
+                                                f"{stats.ci_width:.1f}%"
+                                                if stats and stats.ci_width
+                                                else "N/A"
+                                            )
+                                            console.print(
+                                                f"  [green]Converged: {info['model_name']} / "
+                                                f"{prompt[:40]}... "
+                                                f"after {q} queries (CI: {ci_w})[/green]"
+                                            )
+
+                            # Rate limit between query rounds
                             time.sleep(0.5)
 
     def _run_fixed(
@@ -478,33 +528,61 @@ class VisibilityTracker:
             len(enabled_models) * sum(len(p) for p in all_prompts.values()) * queries_per_prompt
         )
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Running queries...", total=total_queries)
+        # Pre-resolve model info once (avoids repeated string splitting in threads)
+        model_info = {}
+        for model_key in enabled_models:
+            parts = model_key.split(":", 1)
+            model_info[model_key] = {
+                "adapter": self.adapters[model_key],
+                "provider": parts[0],
+                "model_name": parts[1] if len(parts) > 1 else model_key,
+            }
 
-            for model_key in enabled_models:
-                adapter = self.adapters[model_key]
-                parts = model_key.split(":", 1)
-                provider = parts[0]
-                model_name = parts[1] if len(parts) > 1 else model_key
+        with ThreadPoolExecutor(max_workers=len(enabled_models)) as executor:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Running queries...", total=total_queries)
 
                 for prompt_category, prompts in all_prompts.items():
                     for prompt in prompts:
                         for query_num in range(queries_per_prompt):
-                            success, error_msg = self._execute_query(
-                                adapter, result, provider, model_name, prompt, max_retries
-                            )
-                            if not success:
-                                result.errors.append(
-                                    f"{model_name}: {prompt[:50]}... - {error_msg}"
+                            # Submit all models in parallel for this (prompt, query_num)
+                            futures = {}
+                            for model_key in enabled_models:
+                                info = model_info[model_key]
+                                future = executor.submit(
+                                    self._execute_query,
+                                    info["adapter"],
+                                    result,
+                                    info["provider"],
+                                    info["model_name"],
+                                    prompt,
+                                    max_retries,
+                                    sentiment_mode,
                                 )
-                            result.total_queries += 1
-                            progress.update(task, advance=1)
+                                futures[future] = info["model_name"]
+
+                            # Collect results as they complete
+                            for future in as_completed(futures):
+                                model_name = futures[future]
+                                try:
+                                    success, error_msg, _mentions, _sentiment = future.result()
+                                except Exception as e:
+                                    success, error_msg = False, str(e)
+
+                                if not success:
+                                    result.errors.append(
+                                        f"{model_name}: {prompt[:50]}... - {error_msg}"
+                                    )
+                                result.total_queries += 1
+                                progress.update(task, advance=1)
+
+                            # Rate limit between query rounds
                             time.sleep(0.5)
 
     def _execute_query(
@@ -519,6 +597,8 @@ class VisibilityTracker:
     ) -> tuple:
         success = False
         error_msg = None
+        mentions = {}
+        last_sentiment = {}
         for attempt in range(max_retries):
             try:
                 response = adapter.query(prompt)
@@ -526,7 +606,7 @@ class VisibilityTracker:
 
                 enriched_mentions = mentions.copy()
                 if sentiment_mode == "detailed" and self.sentiment_analyzer:
-                    result._last_sentiment = {}
+                    last_sentiment = {}
                     for brand in mentions:
                         sentiment = self.sentiment_analyzer.analyze_detailed(brand, response)
                         enriched_mentions[brand] = {
@@ -537,7 +617,7 @@ class VisibilityTracker:
                                 "composite": sentiment.composite_score,
                             },
                         }
-                        result._last_sentiment[brand] = {
+                        last_sentiment[brand] = {
                             "prominence": sentiment.prominence,
                             "sentiment": sentiment.sentiment,
                             "composite": sentiment.composite_score,
@@ -551,8 +631,8 @@ class VisibilityTracker:
                     response_text=response,
                     mentions=enriched_mentions,
                 )
-                result.successful_queries += 1
-                result._last_mentions = mentions
+                with self._result_lock:
+                    result.successful_queries += 1
                 success = True
                 break
             except Exception as e:
@@ -560,9 +640,10 @@ class VisibilityTracker:
                 time.sleep(2**attempt)
 
         if not success:
-            result.failed_queries += 1
+            with self._result_lock:
+                result.failed_queries += 1
 
-        return success, error_msg
+        return success, error_msg, mentions, last_sentiment
 
     def _run_post_batch_sentiment(
         self, result: RunResult, run_metadata: dict, verbose: bool
@@ -638,6 +719,67 @@ class VisibilityTracker:
                 console.print(f"  • {error}")
             if len(result.errors) > 5:
                 console.print(f"  ... and {len(result.errors) - 5} more")
+
+    def _print_model_comparison(self, run_id: int) -> None:
+        """Print side-by-side model comparison table for a specific run."""
+        records = self.db.get_by_run(run_id)
+
+        if not records:
+            return
+
+        # Aggregate by model
+        model_stats: Dict[str, Dict[str, int]] = {}
+        for record in records:
+            model_name = record["model_name"]
+            mentions = json.loads(record.get("mentions_json") or "{}")
+
+            if model_name not in model_stats:
+                model_stats[model_name] = {"queries": 0, "mentions": 0}
+
+            model_stats[model_name]["queries"] += 1
+            # Count if any brand was mentioned
+            if mentions:
+                model_stats[model_name]["mentions"] += 1
+
+        if len(model_stats) < 2:
+            return  # No comparison needed for single model
+
+        from rich.table import Table
+
+        table = Table(title=f"Model Comparison \u2014 Run #{run_id}")
+        table.add_column("Model", style="cyan")
+        table.add_column("Mention Rate", style="green", justify="right")
+        table.add_column("Queries", style="blue", justify="right")
+        table.add_column("Mentions", style="magenta", justify="right")
+        table.add_column("Delta", style="yellow", justify="right")
+
+        # Sort by mention rate descending
+        sorted_models = sorted(
+            model_stats.items(),
+            key=lambda x: x[1]["mentions"] / max(x[1]["queries"], 1),
+            reverse=True,
+        )
+
+        best_rate = None
+        for model_name, stats in sorted_models:
+            rate = (stats["mentions"] / stats["queries"] * 100) if stats["queries"] > 0 else 0
+
+            if best_rate is None:
+                best_rate = rate
+                delta_str = "\u2014"
+            else:
+                delta = rate - best_rate
+                delta_str = f"{delta:+.1f}%"
+
+            table.add_row(
+                model_name,
+                f"{rate:.1f}%",
+                str(stats["queries"]),
+                str(stats["mentions"]),
+                delta_str,
+            )
+
+        console.print(table)
 
     def export_results(
         self, run_id: Optional[int] = None, format: str = "csv", output_path: str = "results.csv"
