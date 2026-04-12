@@ -623,3 +623,100 @@ async def get_convergence_live():
         }
     finally:
         conn.close()
+
+
+# --- Segment Analysis Endpoints ---
+
+
+@router.get("/visibility-by-segment")
+async def get_visibility_by_segment(
+    brand: str = Query(..., description="Brand to analyze"),
+    dimension: str = Query(
+        ..., description="Tag dimension: intent, purchase_stage, topic, or query_type"
+    ),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Get mention rate per segment value for a given dimension."""
+    valid_dimensions = ("intent", "purchase_stage", "topic", "query_type")
+    if dimension not in valid_dimensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid dimension '{dimension}'. Must be one of: {valid_dimensions}",
+        )
+
+    segments = _db.get_visibility_by_segment(brand, dimension, days)
+
+    # Add confidence intervals where possible
+    for seg in segments:
+        n = seg["total_queries"]
+        p = seg["mention_rate"] / 100.0 if n > 0 else 0
+        ci = _engine._calculate_confidence_interval(seg["mention_rate"], n, 95)
+        seg["confidence_interval"] = ci
+
+    return {
+        "brand": brand,
+        "dimension": dimension,
+        "days": days,
+        "segments": segments,
+    }
+
+
+@router.get("/segment-comparison")
+async def get_segment_comparison(
+    brands: str = Query(..., description="Comma-separated brand names"),
+    dimension: str = Query(
+        ..., description="Tag dimension: intent, purchase_stage, topic, or query_type"
+    ),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Side-by-side mention rates per brand per segment."""
+    valid_dimensions = ("intent", "purchase_stage", "topic", "query_type")
+    if dimension not in valid_dimensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid dimension '{dimension}'. Must be one of: {valid_dimensions}",
+        )
+
+    brand_list = [b.strip() for b in brands.split(",") if b.strip()]
+    if not brand_list:
+        raise HTTPException(status_code=400, detail="At least one brand required")
+
+    comparison = _db.get_segment_comparison(brand_list, dimension, days)
+
+    # Add CIs
+    for brand_key, segments in comparison.items():
+        for seg in segments:
+            ci = _engine._calculate_confidence_interval(
+                seg["mention_rate"], seg["total_queries"], 95
+            )
+            seg["confidence_interval"] = ci
+
+    return {
+        "dimension": dimension,
+        "days": days,
+        "brands": comparison,
+    }
+
+
+@router.get("/variation-drift")
+async def get_variation_drift(
+    canonical_id: str = Query(..., description="Canonical prompt group ID"),
+    brand: str = Query(..., description="Brand to check mentions for"),
+    days: int = Query(30, description="Number of days to look back"),
+):
+    """Per-variation mention rates for a single canonical prompt group."""
+    variations = _db.get_variation_drift(canonical_id, brand, days)
+
+    # Calculate overall canonical rate
+    total_queries = sum(v["total_queries"] for v in variations)
+    total_mentions = sum(v["mention_count"] for v in variations)
+    canonical_rate = (total_mentions / total_queries * 100) if total_queries > 0 else 0
+
+    return {
+        "canonical_id": canonical_id,
+        "brand": brand,
+        "days": days,
+        "canonical_rate": round(canonical_rate, 2),
+        "total_queries": total_queries,
+        "variations": variations,
+    }

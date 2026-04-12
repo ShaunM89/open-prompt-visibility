@@ -378,3 +378,94 @@ export async function fetchStatisticalSummary(brand: string, days: number): Prom
     };
   }
 }
+
+// --- Segment Analysis Types and Functions ---
+
+export interface SegmentItem {
+  segment_value: string;
+  total_queries: number;
+  mention_count: number;
+  mention_rate: number;
+  confidence_interval: [number, number] | null;
+}
+
+export interface SegmentData {
+  brand: string;
+  dimension: string;
+  days: number;
+  segments: SegmentItem[];
+}
+
+export async function fetchVisibilityBySegment(
+  brand: string,
+  dimension: string,
+  days: number
+): Promise<SegmentData> {
+  try {
+    const data = await fetchApi('data', { brand, dimension, days, endpoint: 'visibility-by-segment' });
+    return data;
+  } catch (err) {
+    return { brand, dimension, days, segments: [] };
+  }
+}
+
+export interface SegmentBrandData {
+  segment_value: string;
+  total_queries: number;
+  mention_count: number;
+  mention_rate: number;
+  confidence_interval: [number, number] | null;
+}
+
+export interface SegmentComparison {
+  dimension: string;
+  days: number;
+  brands: Record<string, SegmentBrandData[]>;
+}
+
+export async function fetchSegmentComparison(
+  brands: string[],
+  dimension: string,
+  days: number
+): Promise<SegmentComparison> {
+  try {
+    const data = await fetchApi('data', {
+      brands: brands.join(','),
+      dimension,
+      days,
+      endpoint: 'segment-comparison',
+    });
+    return data;
+  } catch (err) {
+    return { dimension, days, brands: {} };
+  }
+}
+
+export interface VariationDriftItem {
+  prompt: string;
+  total_queries: number;
+  mention_count: number;
+  mention_rate: number;
+}
+
+export interface VariationDriftData {
+  canonical_id: string;
+  brand: string;
+  days: number;
+  canonical_rate: number;
+  total_queries: number;
+  variations: VariationDriftItem[];
+}
+
+export async function fetchVariationDrift(
+  canonicalId: string,
+  brand: string,
+  days: number
+): Promise<VariationDriftData | null> {
+  try {
+    const data = await fetchApi('data', { canonical_id: canonicalId, brand, days, endpoint: 'variation-drift' });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}

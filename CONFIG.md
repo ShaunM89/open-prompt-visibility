@@ -81,11 +81,62 @@ brands:
 **Detailed mode**: Runs sentiment analysis on every query response using the analysis LLM. Tracks convergence on composite score (prominence × sentiment). More LLM calls but analysis uses the free local model.
 
 ### Prompts
+
+The `configs/users/prompts.yaml` file supports two formats:
+
+#### Old format (flat strings, still accepted)
+
+```yaml
+brand_mentions:
+  - "What are the best athletic footwear brands for running?"
+  - "Compare Nike vs Adidas for basketball shoes"
+```
+
+#### New format (structured with classification tags)
+
 ```yaml
 prompts:
-  category_name:
-    - "Query 1"
-    - "Query 2"
+  - canonical_id: "cmp_run_001"
+    prompts:
+      - "What are the best athletic footwear brands for running?"
+      - "Which running shoe brands are considered the best?"
+      - "Top athletic footwear options for runners in 2026?"
+    tags:
+      intent: comparison
+      purchase_stage: awareness
+      topic: running
+      query_type: unbranded
+
+  - canonical_id: "rec_bball_002"
+    prompts:
+      - "Recommend a Nike basketball shoe for outdoor courts"
+      - "What Nike basketball shoe would you suggest for outdoor play?"
+    tags:
+      intent: recommendation
+      purchase_stage: decision
+      topic: basketball
+      query_type: branded
+```
+
+**Tag dimensions:**
+
+| Dimension | Valid Values |
+|---|---|
+| `intent` | `comparison`, `recommendation`, `informational`, `purchase_intent`, `awareness` |
+| `purchase_stage` | `awareness`, `consideration`, `decision`, `retention` |
+| `topic` | Free-form (e.g., `running`, `basketball`, `sustainability`) |
+| `query_type` | `branded`, `unbranded` (auto-detected if omitted) |
+
+**Canonical IDs** follow the format `{intent_abbrev}_{topic_abbrev}_{sequence}` (e.g., `cmp_run_001`).
+
+**Generate with the CLI:**
+```bash
+pvt prompts generate --brand Nike --keywords running,basketball,sustainability
+```
+
+**Classify existing prompts:**
+```bash
+pvt prompts classify --brand Nike
 ```
 
 You can also merge prompts from files:
@@ -219,3 +270,23 @@ pvt config
 # Export configuration as JSON
 pvt config --json > config.json
 ```
+
+## Segment Analysis
+
+When prompts are classified with tags (via `pvt prompts generate` or `pvt prompts classify`), visibility data can be segmented by any dimension.
+
+### API Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /visibility-by-segment?brand=Nike&dimension=intent&days=30` | Mention rate per intent value with CIs |
+| `GET /segment-comparison?brands=Nike,Adidas&dimension=purchase_stage&days=30` | Side-by-side mention rates per brand per stage |
+| `GET /variation-drift?canonical_id=cmp_run_001&brand=Nike` | Per-variation mention rates for a canonical prompt |
+
+### Dashboard
+
+The Segments tab in the web dashboard provides:
+- Dimension picker (Intent / Purchase Stage / Topic / Query Type)
+- Grouped bar chart with confidence intervals
+- Segment breakdown table
+- Empty state with CLI instructions when no tagged data exists

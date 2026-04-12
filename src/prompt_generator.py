@@ -1,5 +1,7 @@
 """Prompt generation and variation module for query fan-out."""
 
+# DEPRECATED: This module is superseded by src/prompt_compiler.py for structured prompt management.
+
 import json
 import re
 from dataclasses import dataclass

@@ -26,6 +26,7 @@ from .analyzer import (
 from .models import ModelAdapter, create_adapter
 from .storage import TrackDatabase
 from .prompt_generator import PromptGenerator, PromptVariation
+from .prompt_compiler import PromptCompiler, StructuredPrompt
 
 console = Console()
 
@@ -55,6 +56,8 @@ class VisibilityTracker:
         self.detector = MentionDetector(self.config)
         self.analyzer = AnalyticsEngine(self.db)
         self.generator = PromptGenerator(self.config)
+        self.compiler = PromptCompiler(self.config)
+        self._prompt_metadata: Dict[str, tuple] = {}  # prompt_text -> (canonical_id, tags_dict)
         self.config_path = config_path
         self.config_hash = self._calculate_config_hash()
         self._result_lock = threading.Lock()
@@ -186,14 +189,30 @@ class VisibilityTracker:
         """
         all_prompts = {}
 
-        # Start with base prompts
-        for category, prompts in self.config["prompts"].items():
-            all_prompts[category] = prompts.copy()
+        # Handle both old format (dict of category -> string list) and
+        # new format (list of structured prompt entries from PromptCompiler)
+        prompts_config = self.config.get("prompts", {})
+        if isinstance(prompts_config, list):
+            # New structured format: prompts is a list of dicts with canonical_id, prompts, tags
+            structured_texts = []
+            for entry in prompts_config:
+                if isinstance(entry, dict) and "prompts" in entry:
+                    for p in entry["prompts"]:
+                        if isinstance(p, str) and p not in structured_texts:
+                            structured_texts.append(p)
+                elif isinstance(entry, str) and entry not in structured_texts:
+                    structured_texts.append(entry)
+            all_prompts["structured"] = structured_texts
+        elif isinstance(prompts_config, dict):
+            # Old format: dict of category -> list of strings
+            for category, prompts in prompts_config.items():
+                if isinstance(prompts, list):
+                    all_prompts[category] = [p for p in prompts if isinstance(p, str)]
 
         # Add variations if enabled
         if enable_variations:
             base_prompts = []
-            for prompts in self.config["prompts"].values():
+            for prompts in all_prompts.values():
                 base_prompts.extend(prompts)
 
             if base_prompts:
@@ -238,7 +257,29 @@ class VisibilityTracker:
                 f"  → Generated {len(all_prompts[auto_gen_category])} auto-generated prompts"
             )
 
+        # Load structured prompts for metadata lookup
+        self._load_prompt_metadata()
+
         return all_prompts
+
+    def _load_prompt_metadata(self) -> None:
+        """Load structured prompt metadata from prompts.yaml.
+
+        Populates self._prompt_metadata for prompt→(canonical_id, tags) lookup
+        at query recording time.
+        """
+        # Find prompts.yaml path from config
+        prompts_path = Path("configs/users/prompts.yaml")
+        if not prompts_path.exists():
+            return
+
+        try:
+            structured = self.compiler.load_prompts(str(prompts_path))
+            if structured:
+                self._prompt_metadata = self.compiler.build_prompt_lookup(structured)
+        except Exception:
+            # Non-fatal — prompts will run without metadata
+            pass
 
     def _health_check(self) -> Dict[str, bool]:
         """Check health of all adapters."""
@@ -623,6 +664,14 @@ class VisibilityTracker:
                             "composite": sentiment.composite_score,
                         }
 
+                # Resolve prompt metadata (canonical_id, tags) if available
+                canonical_id = ""
+                prompt_tags = "{}"
+                if prompt in self._prompt_metadata:
+                    cid, tags = self._prompt_metadata[prompt]
+                    canonical_id = cid
+                    prompt_tags = json.dumps(tags.to_dict() if hasattr(tags, "to_dict") else tags)
+
                 self.db.record_query(
                     run_id=result.run_id,
                     model_provider=provider,
@@ -630,6 +679,8 @@ class VisibilityTracker:
                     prompt=prompt,
                     response_text=response,
                     mentions=enriched_mentions,
+                    prompt_tags=prompt_tags,
+                    canonical_id=canonical_id,
                 )
                 with self._result_lock:
                     result.successful_queries += 1
