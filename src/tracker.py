@@ -591,10 +591,15 @@ class VisibilityTracker:
     ):
         max_q = sampler.max_queries
         check_interval = sampler.check_interval
+        batch_size = (
+            self.config.get("tracking", {}).get("adaptive_sampling", {}).get("query_batch_size", 1)
+        )
 
         already_converged = sampler.get_converged_pairs(primary_brand, all_brands)
         run_start_time = time.monotonic()
         total_prompts = len(prompt_list)
+
+        pool_size = len(enabled_models) * batch_size
 
         model_info = {}
         for model_key in enabled_models:
@@ -605,7 +610,7 @@ class VisibilityTracker:
                 "model_name": parts[1] if len(parts) > 1 else model_key,
             }
 
-        with ThreadPoolExecutor(max_workers=len(enabled_models)) as executor:
+        with ThreadPoolExecutor(max_workers=pool_size) as executor:
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -635,28 +640,31 @@ class VisibilityTracker:
                         for model_key in enabled_models:
                             if model_key in converged_models:
                                 continue
-                            if model_queries[model_key] >= max_q:
+                            remaining = max_q - model_queries[model_key]
+                            if remaining <= 0:
                                 converged_models.add(model_key)
                                 continue
                             info = model_info[model_key]
-                            work_items.append((model_key, info))
+                            n = min(batch_size, remaining)
+                            work_items.append((model_key, info, n))
 
                         if not work_items:
                             break
 
                         futures = {}
-                        for model_key, info in work_items:
-                            future = executor.submit(
-                                self._execute_query,
-                                info["adapter"],
-                                result,
-                                info["provider"],
-                                info["model_name"],
-                                prompt,
-                                max_retries,
-                                sentiment_mode,
-                            )
-                            futures[future] = (model_key, info["model_name"])
+                        for model_key, info, n in work_items:
+                            for _ in range(n):
+                                future = executor.submit(
+                                    self._execute_query,
+                                    info["adapter"],
+                                    result,
+                                    info["provider"],
+                                    info["model_name"],
+                                    prompt,
+                                    max_retries,
+                                    sentiment_mode,
+                                )
+                                futures[future] = (model_key, info["model_name"])
 
                         for future in as_completed(futures):
                             model_key, model_name = futures[future]
