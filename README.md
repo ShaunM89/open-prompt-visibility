@@ -97,19 +97,25 @@ pvt export --format csv --output results.csv
 | Command | Description |
 |---------|-------------|
 | `pvt run` | Run a tracking batch across all configured models |
-| `pvt run --model-only ollama:gemma4:e2b` | Run with only the specified model |
+| `pvt run -v` / `pvt run --verbose` | Show detailed output during run (progress, convergence, model stats) |
+| `pvt run --health-check` | Only check model availability, don't run queries |
+| `pvt run --model-only ollama:gemma4:e2b` | Run with only the specified model (overrides config) |
 | `pvt run --model ollama:gemma4:e2b` | Add a model alongside configured models |
+| `pvt run --models ollama:gemma4:e2b,ollama:nemotron-3-nano:4b` | Add multiple models (comma-separated) |
+| `pvt run --scenario full_comparison` | Use a named scenario from config |
 | `pvt run --enable-variations` | Run with auto-generated prompt variations |
+| `pvt run --num-variations 3` | Number of variations per base prompt (default: 3) |
+| `pvt run --variation-strategy semantic` | Variation strategy: `semantic`, `syntactic`, or `llm` |
 | `pvt run --enable-auto-gen` | Run with auto-generated brand prompts |
+| `pvt run --auto-gen-per-brand 10` | Number of auto-generated prompts per brand (default: 5) |
 | `pvt run --sentiment-mode fast` | Run with post-batch sentiment analysis |
 | `pvt run --sentiment-mode detailed` | Run with per-query sentiment analysis |
+| `pvt run --sentiment-mode off` | Disable sentiment analysis |
 | `pvt run --analysis-model ollama:gemma4:e2b` | Override the analysis LLM |
-| `pvt run --target-ci-width 15` | Set adaptive sampling CI target |
-| `pvt stats` | Show database statistics |
-| `pvt trends "Brand"` | Show mention trends with confidence intervals |
-| `pvt export -f csv -o out.csv` | Export results to CSV or JSON |
-| `pvt config` | Display the active configuration |
-| `pvt serve` | Start the API server (for the web dashboard) |
+| `pvt run --target-ci-width 15` | Set adaptive sampling CI target (e.g., 15 = ±7.5%) |
+| `pvt run --max-queries 100` | Cap queries per model×prompt pair for adaptive sampling |
+| `pvt run --convergence-scope primary_brand` | Converge on primary brand only (default) |
+| `pvt run --convergence-scope all_tracked_brands` | Converge across all tracked brands |
 
 ### Prompt Management Commands
 
@@ -122,6 +128,22 @@ pvt export --format csv --output results.csv
 | `pvt prompts list --filter-intent comparison` | Filter by intent type |
 | `pvt prompts list --filter-topic running` | Filter by topic |
 | `pvt prompts validate` | Check all prompts have complete tags and valid IDs |
+
+### Data & Analysis Commands
+
+| Command | Description |
+|---------|-------------|
+| `pvt stats` | Show database statistics |
+| `pvt stats -d 30` | Stats for last 30 days (default: 90) |
+| `pvt trends "Brand"` | Show mention trends with confidence intervals |
+| `pvt trends "Brand" -d 30 --ci 95` | Last 30 days with 95% CI |
+| `pvt export -f csv -o out.csv` | Export results to CSV |
+| `pvt export -f json -o out.json --run-id 15` | Export specific run as JSON |
+| `pvt config` | Display the active configuration |
+| `pvt config -j` | Output configuration as JSON |
+| `pvt serve` | Start the API server (for the web dashboard) |
+| `pvt serve --host 0.0.0.0 -p 8080` | Custom host and port |
+| `pvt serve --reload` | Auto-reload for development |
 
 ## Web Dashboard
 
