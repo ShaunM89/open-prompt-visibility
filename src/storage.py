@@ -79,7 +79,6 @@ class TrackDatabase:
             except sqlite3.OperationalError:
                 pass
 
-            # Phase: Prompt classification — add prompt_tags and canonical_id columns
             try:
                 cursor.execute(
                     "ALTER TABLE visibility_records ADD COLUMN prompt_tags TEXT DEFAULT '{}'"
@@ -101,18 +100,40 @@ class TrackDatabase:
             except sqlite3.OperationalError:
                 pass
 
+            try:
+                cursor.execute(
+                    "ALTER TABLE runs ADD COLUMN status TEXT NOT NULL DEFAULT 'completed'"
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE runs ADD COLUMN checkpoint TEXT")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE runs ADD COLUMN checkpoint_at TIMESTAMP")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_run_status ON runs(status)")
+            except sqlite3.OperationalError:
+                pass
+
             conn.commit()
         finally:
             conn.close()
 
-    def create_run(self, config_hash: Optional[str] = None) -> int:
+    def create_run(self, config_hash: Optional[str] = None, status: str = "running") -> int:
         """Create a new run record. Returns run_id."""
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO runs (config_hash, started_at) VALUES (?, ?)",
-                (config_hash, datetime.now(timezone.utc)),
+                "INSERT INTO runs (config_hash, started_at, status) VALUES (?, ?, ?)",
+                (config_hash, datetime.now(timezone.utc), status),
             )
             conn.commit()
             lastrowid = cursor.lastrowid
@@ -127,15 +148,141 @@ class TrackDatabase:
         try:
             if metadata:
                 cursor.execute(
-                    "UPDATE runs SET completed_at = ?, run_metadata = ? WHERE id = ?",
+                    "UPDATE runs SET completed_at = ?, run_metadata = ?, status = 'completed', checkpoint = NULL WHERE id = ?",
                     (datetime.now(timezone.utc), json.dumps(metadata), run_id),
                 )
             else:
                 cursor.execute(
-                    "UPDATE runs SET completed_at = ? WHERE id = ?",
+                    "UPDATE runs SET completed_at = ?, status = 'completed', checkpoint = NULL WHERE id = ?",
                     (datetime.now(timezone.utc), run_id),
                 )
             conn.commit()
+        finally:
+            conn.close()
+
+    def checkpoint_run(self, run_id: int, checkpoint_data: dict) -> None:
+        """Save checkpoint data for a running/suspended run."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE runs SET checkpoint = ?, checkpoint_at = ? WHERE id = ?",
+                (json.dumps(checkpoint_data), datetime.now(timezone.utc), run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_checkpoint(self, run_id: int) -> Optional[dict]:
+        """Load checkpoint data for a run. Returns None if no checkpoint."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT checkpoint, status, started_at FROM runs WHERE id = ?",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+            if not row or not row["checkpoint"]:
+                return None
+            data = json.loads(row["checkpoint"])
+            data["_run_status"] = row["status"]
+            data["_started_at"] = row["started_at"]
+            return data
+        finally:
+            conn.close()
+
+    def set_run_status(self, run_id: int, status: str) -> None:
+        """Set run status: 'running', 'suspended', 'completed', 'failed'."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "UPDATE runs SET status = ? WHERE id = ?",
+                (status, run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_run_status(self, run_id: int) -> Optional[str]:
+        """Get current run status."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT status FROM runs WHERE id = ?", (run_id,))
+            row = cursor.fetchone()
+            return row["status"] if row else None
+        finally:
+            conn.close()
+
+    def get_suspended_runs(self) -> List[Dict[str, Any]]:
+        """Get all suspended and interrupted runs available for resume."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT r.*,
+                       COUNT(v.id) as record_count
+                FROM runs r
+                LEFT JOIN visibility_records v ON r.id = v.run_id
+                WHERE r.status IN ('suspended', 'running')
+                  AND r.checkpoint IS NOT NULL
+                  AND r.completed_at IS NULL
+                GROUP BY r.id
+                ORDER BY r.started_at DESC
+                """,
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_latest_suspended_run(self) -> Optional[Dict[str, Any]]:
+        """Get the most recent suspended run."""
+        runs = self.get_suspended_runs()
+        return runs[0] if runs else None
+
+    def get_run_query_counts(self, run_id: int) -> Dict[str, int]:
+        """Get per-model query counts for a run."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT model_name, COUNT(*) as count
+                FROM visibility_records
+                WHERE run_id = ?
+                GROUP BY model_name
+                """,
+                (run_id,),
+            )
+            return {row["model_name"]: row["count"] for row in cursor.fetchall()}
+        finally:
+            conn.close()
+
+    def get_run_model_prompt_counts(self, run_id: int) -> Dict[str, Dict[str, int]]:
+        """Get per (model, prompt) query counts for a run."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT model_name, prompt, COUNT(*) as count
+                FROM visibility_records
+                WHERE run_id = ?
+                GROUP BY model_name, prompt
+                """,
+                (run_id,),
+            )
+            result: Dict[str, Dict[str, int]] = {}
+            for row in cursor.fetchall():
+                model = row["model_name"]
+                if model not in result:
+                    result[model] = {}
+                result[model][row["prompt"]] = row["count"]
+            return result
         finally:
             conn.close()
 

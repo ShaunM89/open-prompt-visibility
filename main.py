@@ -143,6 +143,11 @@ def cli():
     default=None,
     help="Override analysis LLM (format: provider:model)",
 )
+@click.option(
+    "--estimate-cost",
+    is_flag=True,
+    help="Show cost estimate without running queries",
+)
 def run_cli(
     config: str,
     verbose: bool,
@@ -161,6 +166,7 @@ def run_cli(
     convergence_scope: str,
     sentiment_mode: str,
     analysis_model: str,
+    estimate_cost: bool,
 ):
     """Run a full tracking batch across all configured models and prompts."""
     try:
@@ -308,6 +314,51 @@ def run_cli(
                 )
             console.print(f"[cyan]Analysis model: {provider}/{model_name}[/cyan]")
 
+        if estimate_cost:
+            from src.cost import estimate_run_cost
+
+            all_prompts = tracker._prepare_prompts(
+                enable_variations,
+                num_variations,
+                variation_strategy,
+                enable_auto_gen,
+                auto_gen_per_brand,
+            )
+            num_prompts = sum(len(p) for p in all_prompts.values())
+            enabled_models = [m for m in tracker.config.get("models", []) if m.get("enabled", True)]
+            adaptive_cfg = tracker.config.get("tracking", {}).get("adaptive_sampling", {})
+            max_q = adaptive_cfg.get(
+                "max_queries", tracker.config["tracking"]["queries_per_prompt"]
+            )
+
+            user_pricing = None
+            if tracker.config.get("pricing"):
+                user_pricing = tracker.config["pricing"]
+
+            result = estimate_run_cost(
+                enabled_models, num_prompts, max_q, user_pricing=user_pricing
+            )
+
+            console.print("\n[bold]Cost Estimate[/bold]")
+            console.print(f"  Prompts: {num_prompts}")
+            console.print(f"  Queries per prompt: up to {max_q} (adaptive)")
+            console.print(f"  Estimated total queries: ~{result['estimated_queries']}")
+
+            for mc in result["models"]:
+                if mc.total_cost == 0.0:
+                    console.print(f"\n  {mc.provider}/{mc.model}: [green]$0.00 (local)[/green]")
+                else:
+                    console.print(f"\n  {mc.provider}/{mc.model}: max ${mc.total_cost:.2f}")
+
+            if result["is_local"]:
+                console.print(f"\n  [green]Total: $0.00 (all local models)[/green]")
+            else:
+                console.print(f"\n  Max cost: ${result['total_max_cost']:.2f}")
+                console.print(
+                    f"  Expected: ${result['total_expected_cost']:.2f} (with adaptive sampling)"
+                )
+            return
+
         if health_check:
             console.print("\n[bold]Running health check...[/bold]")
             health = tracker._health_check()
@@ -319,6 +370,9 @@ def run_cli(
             return
 
         console.print("\n[bold blue]Starting tracking run...[/bold blue]")
+        console.print(
+            "[dim]Press Ctrl+C to suspend (progress is saved). Resume with: pvt resume[/dim]"
+        )
         result = tracker.run_batch(verbose=verbose)
 
         if result.failed_queries > 0:
@@ -331,6 +385,57 @@ def run_cli(
         sys.exit(1)
     except ValueError as e:
         console.print(f"[red]Configuration error: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Unexpected error: {e}[/red]")
+        if verbose:
+            import traceback
+
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command("resume")
+@click.argument("run_id", required=False, type=int)
+@click.option("--latest", "-l", is_flag=True, help="Resume the most recent suspended run")
+@click.option("--config", "-c", default="configs/default.yaml", help="Path to configuration file")
+@click.option("--verbose", "-v", is_flag=True, help="Show detailed output during run")
+def resume_cli(run_id: int, latest: bool, config: str, verbose: bool):
+    """Resume a suspended or interrupted tracking run.
+
+    Provide a RUN_ID or use --latest to resume the most recent run.
+    """
+    try:
+        tracker = VisibilityTracker(config)
+
+        if latest and not run_id:
+            suspended = tracker.db.get_latest_suspended_run()
+            if not suspended:
+                console.print("[yellow]No resumable runs found.[/yellow]")
+                return
+            run_id = suspended["id"]
+            status = suspended.get("status", "unknown")
+            console.print(f"[cyan]Resuming run #{run_id} (was {status})[/cyan]")
+
+        if not run_id:
+            suspended = tracker.db.get_suspended_runs()
+            if not suspended:
+                console.print("[yellow]No resumable runs found.[/yellow]")
+                return
+            console.print("[bold]Resumable runs:[/bold]")
+            for r in suspended:
+                ckpt = r.get("checkpoint_at", "unknown")
+                count = r.get("record_count", 0)
+                status = r.get("status", "unknown")
+                console.print(f"  #{r['id']} — {count} queries, {status}, last checkpoint {ckpt}")
+            console.print("\n[yellow]Use: pvt resume <run_id>[/yellow]")
+            return
+
+        result = tracker.resume_run(run_id, verbose=verbose)
+        sys.exit(0 if result.failed_queries == 0 else 1)
+
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
         sys.exit(1)
     except Exception as e:
         console.print(f"[red]Unexpected error: {e}[/red]")
