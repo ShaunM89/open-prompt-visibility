@@ -598,6 +598,7 @@ class VisibilityTracker:
         already_converged = sampler.get_converged_pairs(primary_brand, all_brands)
         run_start_time = time.monotonic()
         total_prompts = len(prompt_list)
+        last_eta_count = 0
 
         pool_size = len(enabled_models) * batch_size
 
@@ -720,7 +721,8 @@ class VisibilityTracker:
                                             f"after {q} queries (CI: {ci_w})[/green]"
                                         )
 
-                        if result.total_queries > 0 and result.total_queries % 20 == 0:
+                        if result.total_queries >= last_eta_count + 20:
+                            last_eta_count = result.total_queries
                             est = sampler.estimate_total_queries(
                                 total_prompts, enabled_models, primary_brand, all_brands
                             )
