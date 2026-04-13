@@ -82,7 +82,7 @@ tracking:
     max_queries: 200                # Hard ceiling per model×prompt pair
     check_interval: 5               # Evaluate convergence every N queries
     convergence_scope: "primary_brand"  # "primary_brand" or "all_tracked_brands"
-    query_batch_size: 4             # Concurrent queries per model per round (match OLLAMA_NUM_PARALLEL)
+    query_batch_size: 8             # Concurrent queries per model per round (match OLLAMA_NUM_PARALLEL)
   
   # Phase 2: Statistical Analysis Configuration
   statistical_analysis:
