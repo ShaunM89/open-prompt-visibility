@@ -64,7 +64,7 @@ tracking:
   #   10 queries  → ~±30% confidence interval
   #   30 queries  → ~±17% confidence interval
   #   100 queries → ~±10% confidence interval
-  queries_per_prompt: 10
+  queries_per_prompt: 5
   
   # Retry settings for failed queries
   max_retries: 3
@@ -78,10 +78,11 @@ tracking:
   # 300+ queries. Consider raising max_queries if you need higher precision.
   adaptive_sampling:
     enabled: true                   # Enable adaptive stopping (set false for fixed query counts)
-    target_ci_width: 20.0           # Stop when 95% CI width < 20% (±10% precision)
+    target_ci_width: 30.0           # Stop when 95% CI width < 30% (±15% precision)
     max_queries: 200                # Hard ceiling per model×prompt pair
-    check_interval: 5               # Evaluate convergence every N queries
+    check_interval: 2               # Evaluate convergence every N queries
     convergence_scope: "primary_brand"  # "primary_brand" or "all_tracked_brands"
+    query_batch_size: 4             # Concurrent queries per model per round (match OLLAMA_NUM_PARALLEL)
   
   # Phase 2: Statistical Analysis Configuration
   statistical_analysis:

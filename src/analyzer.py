@@ -715,6 +715,101 @@ class AdaptiveSampler:
             },
         }
 
+    def restore_from_records(self, records: list, brands: list) -> None:
+        """Reconstruct sampler state from DB visibility_records.
+
+        Each record is a dict with keys: model_name, prompt, mentions_json.
+        """
+        for record in records:
+            model = record.get("model_name", "")
+            prompt = record.get("prompt", "")
+            try:
+                raw_mentions = json.loads(record.get("mentions_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                raw_mentions = {}
+
+            for brand in brands:
+                mentioned = 1.0 if brand in raw_mentions else 0.0
+                self.record(model, prompt, brand, mentioned)
+
+    def get_converged_pairs(
+        self, primary_brand: str, all_brands: Optional[List[str]] = None
+    ) -> set:
+        """Return set of (model, prompt) tuples that have converged."""
+        seen: Dict[str, tuple] = {}
+        for k in self._stats:
+            parts = k.split("::", 2)
+            if len(parts) != 3:
+                continue
+            mp_key = f"{parts[0]}::{parts[1]}"
+            if mp_key not in seen:
+                seen[mp_key] = (parts[0], parts[1])
+
+        converged = set()
+        for _mp_key, (model, prompt) in seen.items():
+            if self.should_stop(model, prompt, primary_brand, all_brands):
+                converged.add((model, prompt))
+        return converged
+
+    def estimate_total_queries(
+        self,
+        total_prompts: int,
+        enabled_models: list,
+        primary_brand: str,
+        all_brands: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Estimate total queries needed for the full run based on observed convergence."""
+        seen_pairs: Dict[str, dict] = {}
+        for k, stats in self._stats.items():
+            parts = k.split("::", 2)
+            if len(parts) != 3:
+                continue
+            mp_key = f"{parts[0]}::{parts[1]}"
+            if mp_key not in seen_pairs:
+                seen_pairs[mp_key] = {
+                    "model": parts[0],
+                    "prompt": parts[1],
+                    "n": 0,
+                    "converged": False,
+                }
+            if parts[2] == primary_brand and stats.n > seen_pairs[mp_key]["n"]:
+                seen_pairs[mp_key]["n"] = stats.n
+                seen_pairs[mp_key]["converged"] = stats.converged(
+                    self.target_ci_width, self.min_queries
+                )
+
+        completed_queries = sum(p["n"] for p in seen_pairs.values())
+        converged_count = sum(1 for p in seen_pairs.values() if p["converged"])
+        total_pairs = total_prompts * len(enabled_models)
+        remaining_pairs = total_pairs - len(seen_pairs)
+
+        avg_per_converged = (
+            completed_queries / max(converged_count, 1) if converged_count > 0 else self.min_queries
+        )
+
+        estimated_remaining = remaining_pairs * avg_per_converged
+        for p in seen_pairs.values():
+            if not p["converged"]:
+                est = self.estimate_remaining(p["model"], p["prompt"], primary_brand)
+                if est is not None:
+                    remaining_est = max(0, est - p["n"])
+                    estimated_remaining += remaining_est
+                else:
+                    estimated_remaining += self.max_queries
+
+        estimated_total = completed_queries + estimated_remaining
+        completion_pct = (completed_queries / estimated_total * 100) if estimated_total > 0 else 0
+
+        return {
+            "completed_queries": completed_queries,
+            "estimated_total": int(estimated_total),
+            "estimated_remaining": int(estimated_remaining),
+            "completion_pct": round(completion_pct, 1),
+            "converged_pairs": converged_count,
+            "total_pairs": total_pairs,
+            "avg_per_converged": round(avg_per_converged, 1),
+        }
+
 
 class AnalyticsEngine:
     """Analytics and reporting engine with statistical analysis."""
