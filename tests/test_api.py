@@ -1,6 +1,5 @@
 """Tests for API endpoints."""
 
-import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -146,7 +145,6 @@ class TestStatsEndpoint:
     def test_stats(self, client):
         response = client.get("/stats?brand=Nike&days=30")
         assert response.status_code == 200
-        data = response.json()
 
 
 class TestSentimentEndpoint:
@@ -206,3 +204,80 @@ class TestSentimentEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert "mode" in data
+
+
+class TestUntestedEndpoints:
+    def test_get_data_endpoint_brand(self, client):
+        response = client.get("/data?brand=Nike&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["filters"]["brand"] == "Nike"
+        assert "results" in data
+
+    def test_post_run_start(self, client):
+        response = client.post(
+            "/run/start?enable_variations=true&num_variations=2&variation_strategy=semantic"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "started"
+
+    def test_get_run_history(self, client):
+        response = client.get("/run-history")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+    def test_get_trends(self, client):
+        response = client.get("/trends?brand=Nike&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "trend_data" in data or len(data) > 0
+
+    def test_get_models(self, client):
+        response = client.get("/models?brand=Nike&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        models = data["models"]
+        assert isinstance(models, list)
+        assert len(models) >= 0
+
+    def test_get_export_default(self, client):
+        response = client.get("/export")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["export_info"]["format"] == "json"
+        assert isinstance(data["data"], list)
+
+    def test_get_convergence_status(self, client):
+        response = client.get("/convergence-status?run_id=1")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["run_id"] == 1
+
+    def test_get_convergence_status_not_found(self, client):
+        response = client.get("/convergence-status?run_id=99999")
+        assert response.status_code == 404
+
+    def test_get_convergence_live(self, client):
+        response = client.get("/convergence-live")
+        assert response.status_code == 200
+        data = response.json()
+        assert "active" in data
+
+    def test_get_visibility_by_segment(self, client):
+        response = client.get("/visibility-by-segment?brand=Nike&dimension=intent&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "segments" in data
+
+    def test_get_segment_comparison(self, client):
+        response = client.get("/segment-comparison?brands=Nike,Adidas&dimension=topic&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "brands" in data
+
+    def test_get_variation_drift(self, client):
+        response = client.get("/variation-drift?canonical_id=1&brand=Nike&days=30")
+        assert response.status_code == 200
+        data = response.json()
+        assert "variations" in data
