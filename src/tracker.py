@@ -727,8 +727,8 @@ class VisibilityTracker:
                                 total_prompts, enabled_models, primary_brand, all_brands
                             )
                             elapsed = time.monotonic() - run_start_time
-                            if est["completed_queries"] > 0 and elapsed > 0:
-                                qps = est["completed_queries"] / elapsed
+                            if result.total_queries > 0 and elapsed > 0:
+                                qps = result.total_queries / elapsed
                                 eta_secs = est["estimated_remaining"] / qps if qps > 0 else 0
                                 eta_h = int(eta_secs // 3600)
                                 eta_m = int((eta_secs % 3600) // 60)
