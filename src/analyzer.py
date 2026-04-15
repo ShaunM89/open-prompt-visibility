@@ -441,8 +441,6 @@ class WilsonCIStrategy(CIStrategy):
         if n == 0 or not scores:
             return None
         p = sum(scores) / n
-        if p == 0:
-            return None
         z = self.Z_SCORES.get(int(confidence_level), 1.96)
         denominator = 1 + z**2 / n
         centre = (p + z**2 / (2 * n)) / denominator

@@ -8,7 +8,7 @@ from src.api.prompts import router as prompts_router
 app = FastAPI(
     title="AI Visibility Tracker API",
     description="API endpoints for brand visibility analytics",
-    version="0.3.0",
+    version="1.1.1",
 )
 
 app.add_middleware(
@@ -27,5 +27,5 @@ async def root():
     return {
         "service": "AI Visibility Tracker API",
         "status": "healthy",
-        "version": "0.3.0",
+        "version": "1.1.1",
     }
