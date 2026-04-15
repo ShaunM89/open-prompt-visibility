@@ -150,6 +150,155 @@ class TestHuggingFaceAdapter:
         assert adapter.health_check() is False
 
 
+class TestOllamaAdapterErrors:
+    @pytest.fixture
+    def adapter(self):
+        return OllamaAdapter(model="test-model")
+
+    @patch("src.models.requests.post")
+    def test_query_connection_error(self, mock_post, adapter):
+        import requests as req
+
+        mock_post.side_effect = req.exceptions.ConnectionError("refused")
+        with pytest.raises(ConnectionError, match="Cannot connect to Ollama"):
+            adapter.query("test")
+
+    @patch("src.models.requests.post")
+    def test_query_timeout(self, mock_post, adapter):
+        import requests as req
+
+        mock_post.side_effect = req.exceptions.Timeout("timed out")
+        with pytest.raises(TimeoutError, match="timed out"):
+            adapter.query("test")
+
+    @patch("src.models.requests.post")
+    def test_query_generic_error(self, mock_post, adapter):
+        mock_post.side_effect = ValueError("bad")
+        with pytest.raises(RuntimeError, match="Ollama query failed"):
+            adapter.query("test")
+
+    @patch("src.models.requests.get")
+    def test_health_check_connection_error(self, mock_get, adapter):
+        import requests as req
+
+        mock_get.side_effect = req.exceptions.ConnectionError("refused")
+        assert adapter.health_check() is False
+
+    @patch("src.models.requests.get")
+    def test_health_check_generic_error(self, mock_get, adapter):
+        mock_get.side_effect = Exception("boom")
+        assert adapter.health_check() is False
+
+
+class TestOpenAIAdapterErrors:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+            return OpenAIAdapter(model="gpt-4o")
+
+    @patch("src.models.requests.post")
+    def test_query_http_error(self, mock_post, adapter):
+        import requests as req
+
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.text = "rate limited"
+        mock_response.raise_for_status.side_effect = req.exceptions.HTTPError(
+            response=mock_response
+        )
+        mock_post.return_value = mock_response
+        with pytest.raises(RuntimeError, match="429"):
+            adapter.query("test")
+
+    @patch("src.models.requests.post")
+    def test_query_generic_error(self, mock_post, adapter):
+        mock_post.side_effect = ValueError("bad")
+        with pytest.raises(RuntimeError, match="OpenAI query failed"):
+            adapter.query("test")
+
+    @patch("src.models.requests.get")
+    def test_health_check_failure(self, mock_get, adapter):
+        mock_get.side_effect = Exception("fail")
+        assert adapter.health_check() is False
+
+
+class TestAnthropicAdapterErrors:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "ant-test"}):
+            return AnthropicAdapter(model="claude-3-sonnet-20240229")
+
+    @patch("src.models.requests.post")
+    def test_query_http_error(self, mock_post, adapter):
+        import requests as req
+
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = "forbidden"
+        mock_response.raise_for_status.side_effect = req.exceptions.HTTPError(
+            response=mock_response
+        )
+        mock_post.return_value = mock_response
+        with pytest.raises(RuntimeError, match="403"):
+            adapter.query("test")
+
+    @patch("src.models.requests.post")
+    def test_query_generic_error(self, mock_post, adapter):
+        mock_post.side_effect = ValueError("bad")
+        with pytest.raises(RuntimeError, match="Anthropic query failed"):
+            adapter.query("test")
+
+    @patch("src.models.requests.post")
+    def test_health_check_400_returns_true(self, mock_post, adapter):
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_post.return_value = mock_response
+        assert adapter.health_check() is True
+
+    @patch("src.models.requests.post")
+    def test_health_check_failure(self, mock_post, adapter):
+        mock_post.side_effect = Exception("fail")
+        assert adapter.health_check() is False
+
+
+class TestHuggingFaceAdapterErrors:
+    @pytest.fixture
+    def adapter(self):
+        with patch.dict(os.environ, {"HUGGINGFACE_API_KEY": "hf-test"}):
+            return HuggingFaceAdapter(model="test-model")
+
+    @patch("src.models.requests.post")
+    def test_query_non_list_response(self, mock_post, adapter):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"generated_text": "direct"}
+        mock_post.return_value = mock_response
+        result = adapter.query("test")
+        assert "direct" in result
+
+    @patch("src.models.requests.post")
+    def test_query_generic_error(self, mock_post, adapter):
+        mock_post.side_effect = Exception("fail")
+        with pytest.raises(RuntimeError, match="HuggingFace query failed"):
+            adapter.query("test")
+
+    @patch("src.models.requests.head")
+    def test_health_check_failure(self, mock_head, adapter):
+        mock_head.side_effect = Exception("fail")
+        assert adapter.health_check() is False
+
+
+class TestModelAdapterQueryStream:
+    @patch("src.models.requests.post")
+    def test_query_stream_falls_back(self, mock_post):
+        adapter = OllamaAdapter(model="test")
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"response": "streamed"}
+        mock_post.return_value = mock_response
+        result = adapter.query_stream("test prompt")
+        assert result == "streamed"
+
+
 class TestCreateAdapter:
     """Test adapter factory."""
 
