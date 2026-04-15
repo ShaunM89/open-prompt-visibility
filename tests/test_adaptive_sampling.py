@@ -21,9 +21,11 @@ class TestWilsonCIStrategy:
         rs = self._make_stats([])
         assert rs.ci is None
 
-    def test_ci_none_for_all_zeros(self):
+    def test_ci_valid_for_all_zeros(self):
         rs = self._make_stats([0, 0, 0, 0, 0])
-        assert rs.ci is None
+        assert rs.ci is not None
+        assert rs.ci[0] == 0.0
+        assert rs.ci[1] > 0.0
 
     def test_ci_returns_tuple_for_mixed(self):
         rs = self._make_stats([1, 1, 0, 1, 0])
